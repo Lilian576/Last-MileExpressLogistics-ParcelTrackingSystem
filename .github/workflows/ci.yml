@@ -11,23 +11,21 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    # 1. Checkout code
     - uses: actions/checkout@v3
     
-    # Cài đặt môi trường Node.js
     - name: Use Node.js
       uses: actions/setup-node@v3
       with:
         node-version: '18.x'
         
-    # 2. Cài dependencies
     - name: Install dependencies
+      working-directory: ./backend
       run: npm install
       
-    # 3. Chạy npm run lint (kiểm tra code style)
     - name: Run lint
+      working-directory: ./backend
       run: npm run lint --if-present
       
-    # 4. Chạy npm run test (không lỗi/không crash nhờ --if-present)
     - name: Run test (skeleton)
+      working-directory: ./backend
       run: npm test --if-present
