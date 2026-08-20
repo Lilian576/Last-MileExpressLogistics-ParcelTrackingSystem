@@ -1,21 +1,33 @@
 name: CI Pipeline
+
 on:
   push:
     branches: [ "main", "develop" ]
   pull_request:
     branches: [ "main", "develop" ]
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
+    
     steps:
+    # 1. Checkout code
     - uses: actions/checkout@v3
+    
+    # Cài đặt môi trường Node.js
     - name: Use Node.js
       uses: actions/setup-node@v3
       with:
         node-version: '18.x'
+        
+    # 2. Cài dependencies
     - name: Install dependencies
       run: npm install
+      
+    # 3. Chạy npm run lint (kiểm tra code style)
     - name: Run lint
       run: npm run lint --if-present
+      
+    # 4. Chạy npm run test (không lỗi/không crash nhờ --if-present)
     - name: Run test (skeleton)
       run: npm test --if-present
