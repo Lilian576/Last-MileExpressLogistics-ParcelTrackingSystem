@@ -1,4 +1,7 @@
 import { Module } from '@nestjs/common';
+import { TrackingGateway } from './tracking.gateway';
 
-@Module({})
+@Module({
+  providers: [TrackingGateway],
+})
 export class TrackingModule {}
