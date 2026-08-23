@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { CreateParcelDto } from './create-parcel.dto';
 
 interface PricingInput {
   weightKg: number;
@@ -10,6 +11,8 @@ interface PricingInput {
 
 @Injectable()
 export class ParcelsService {
+  private parcels: any[] = [];
+  private idCounter = 1;
   private readonly BASE_FEE = 15000; // phí cơ bản (VNĐ)
   private readonly PRICE_PER_KG = 5000; // giá theo kg
   private readonly PRICE_PER_KM = 1000; // giá theo km
@@ -54,5 +57,31 @@ export class ParcelsService {
 
   private toRad(deg: number): number {
     return (deg * Math.PI) / 180;
+  }
+
+    create(dto: CreateParcelDto) {
+    const fee = this.calculateFee(dto);
+
+    const newParcel = {
+      id: this.idCounter++,
+      trackingCode: 'PCL' + Date.now(),
+      status: 'CREATED',
+      senderName: dto.senderName,
+      receiverName: dto.receiverName,
+      weightKg: dto.weightKg,
+      fee: fee,
+      createdAt: new Date(),
+    };
+
+    this.parcels.push(newParcel);
+    return newParcel;
+  }
+
+    findAll() {
+    return this.parcels;
+  }
+
+  findOne(id: number) {
+    return this.parcels.find((p) => p.id === id);
   }
 }
