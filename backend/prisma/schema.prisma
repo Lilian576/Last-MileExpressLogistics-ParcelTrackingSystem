@@ -1,0 +1,159 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ==========================
+// ENUMS
+// ==========================
+
+enum Role {
+  customer
+  shipper
+  warehouse_staff
+  admin
+}
+
+enum ParcelStatus {
+  CREATED
+  PENDING_PICKUP
+  PICKED_UP
+  IN_TRANSIT
+  AT_HUB
+  OUT_FOR_DELIVERY
+  DELIVERED
+  DELIVERY_FAILED
+  RETURNING
+  RETURNED
+  CANCELLED
+  LOST
+}
+
+enum LocationType {
+  warehouse
+  hub
+  delivery_point
+  sender_address
+}
+
+enum AssignmentType {
+  pickup
+  last_mile
+  hub_transfer
+}
+
+enum AssignmentStatus {
+  assigned
+  accepted
+  in_progress
+  completed
+  failed
+  cancelled
+}
+
+// ==========================
+// MODELS (theo ERD m3.md mục 3)
+// ==========================
+
+model User {
+  id           String   @id @default(uuid())
+  fullName     String   @map("full_name")
+  email        String   @unique
+  phone        String   @unique
+  passwordHash String   @map("password_hash")
+  role         Role     @default(customer)
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  parcelsSent       Parcel[]              @relation("SenderParcels")
+  assignments       DeliveryAssignment[]  @relation("CourierAssignments")
+  statusChangesMade ParcelStatusHistory[] @relation("ChangedByUser")
+
+  @@map("users")
+}
+
+model Parcel {
+  id                    String       @id @default(uuid())
+  trackingCode          String       @unique @map("tracking_code")
+  senderId              String       @map("sender_id")
+  receiverName          String       @map("receiver_name")
+  receiverPhone         String       @map("receiver_phone")
+  receiverAddress       String       @map("receiver_address")
+  weightKg              Decimal      @map("weight_kg")
+  dimensions            String?
+  codAmount             Decimal?     @map("cod_amount")
+  currentStatus         ParcelStatus @default(CREATED) @map("current_status")
+  failedAttemptCount    Int          @default(0) @map("failed_attempt_count")
+  originLocationId      String?      @map("origin_location_id")
+  destinationLocationId String?      @map("destination_location_id")
+  currentLocationId     String?      @map("current_location_id")
+  createdAt             DateTime     @default(now()) @map("created_at")
+  updatedAt             DateTime     @updatedAt @map("updated_at")
+
+  sender            User                  @relation("SenderParcels", fields: [senderId], references: [id])
+  originLocation      Location?           @relation("OriginParcels", fields: [originLocationId], references: [id])
+  destinationLocation  Location?          @relation("DestinationParcels", fields: [destinationLocationId], references: [id])
+  currentLocation      Location?          @relation("CurrentParcels", fields: [currentLocationId], references: [id])
+  statusHistory     ParcelStatusHistory[]
+  assignments       DeliveryAssignment[]
+
+  @@map("parcels")
+}
+
+model ParcelStatusHistory {
+  id         String       @id @default(uuid())
+  parcelId   String       @map("parcel_id")
+  status     ParcelStatus
+  locationId String?      @map("location_id")
+  changedBy  String?      @map("changed_by")
+  note       String?
+  createdAt  DateTime     @default(now()) @map("created_at")
+
+  parcel   Parcel    @relation(fields: [parcelId], references: [id])
+  location Location? @relation(fields: [locationId], references: [id])
+  changer  User?     @relation("ChangedByUser", fields: [changedBy], references: [id])
+
+  @@map("parcel_status_history")
+}
+
+model Location {
+  id               String       @id @default(uuid())
+  name             String
+  type             LocationType
+  address          String
+  latitude         Decimal
+  longitude        Decimal
+  parentLocationId String?      @map("parent_location_id")
+  createdAt        DateTime     @default(now()) @map("created_at")
+
+  parent   Location?  @relation("LocationHierarchy", fields: [parentLocationId], references: [id])
+  children Location[] @relation("LocationHierarchy")
+
+  originParcels      Parcel[]              @relation("OriginParcels")
+  destinationParcels Parcel[]              @relation("DestinationParcels")
+  currentParcels     Parcel[]              @relation("CurrentParcels")
+  statusHistory      ParcelStatusHistory[]
+
+  @@map("locations")
+}
+
+model DeliveryAssignment {
+  id             String            @id @default(uuid())
+  parcelId       String            @map("parcel_id")
+  courierId      String            @map("courier_id")
+  assignmentType AssignmentType    @map("assignment_type")
+  status         AssignmentStatus  @default(assigned)
+  assignedAt     DateTime          @default(now()) @map("assigned_at")
+  completedAt    DateTime?         @map("completed_at")
+  notes          String?
+
+  parcel  Parcel @relation(fields: [parcelId], references: [id])
+  courier User   @relation("CourierAssignments", fields: [courierId], references: [id])
+
+  @@map("delivery_assignments")
+}
