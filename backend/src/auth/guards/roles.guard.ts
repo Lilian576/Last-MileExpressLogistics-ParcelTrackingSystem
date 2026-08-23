@@ -17,9 +17,9 @@ export class RolesGuard implements CanActivate {
     if (!requiredRoles || requiredRoles.length === 0) {
       return true;
     }
-
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
     const { user } = context.switchToHttp().getRequest();
-
+// eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-argument
     if (!user || !requiredRoles.includes(user.role)) {
       throw new ForbiddenException('Bạn không có quyền truy cập tài nguyên này');
     }

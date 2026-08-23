@@ -11,6 +11,7 @@ import { PrismaService } from '../common/prisma.service';
     PassportModule,
     JwtModule.register({
       secret: process.env.JWT_SECRET || 'change-me-in-env',
+// eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
       signOptions: { expiresIn: (process.env.JWT_EXPIRES_IN || '1d') as any },
     }),
   ],

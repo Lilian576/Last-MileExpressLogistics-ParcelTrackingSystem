@@ -19,7 +19,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   // Kết quả trả về của validate() sẽ được Nest gắn vào request.user
-  async validate(payload: JwtPayload) {
+  validate(payload: JwtPayload) {
     return { userId: payload.sub, email: payload.email, role: payload.role };
   }
 }
