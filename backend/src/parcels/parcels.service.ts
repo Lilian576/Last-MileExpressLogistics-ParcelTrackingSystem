@@ -9,9 +9,20 @@ interface PricingInput {
   receiverLng: number;
 }
 
+interface Parcel {
+  id: number;
+  trackingCode: string;
+  status: string;
+  senderName: string;
+  receiverName: string;
+  weightKg: number;
+  fee: number;
+  createdAt: Date;
+}
+
 @Injectable()
 export class ParcelsService {
-  private parcels: any[] = [];
+  private parcels: Parcel[] = [];
   private idCounter = 1;
   private readonly BASE_FEE = 15000; // phí cơ bản (VNĐ)
   private readonly PRICE_PER_KG = 5000; // giá theo kg
