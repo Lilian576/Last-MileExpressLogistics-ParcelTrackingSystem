@@ -1,6 +1,7 @@
-import { Body, Controller, Post, Get, Param } from '@nestjs/common';
+import { Body, Controller, Post, Get, Param, UseGuards } from '@nestjs/common';
 import { CreateParcelDto } from './create-parcel.dto';
 import { ParcelsService } from './parcels.service';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 
 interface CalculateFeeDto {
   weightKg: number;
@@ -25,9 +26,11 @@ export class ParcelsController {
       },
     };
   }
-    @Post()
+  @UseGuards(JwtAuthGuard)
+  @Post()
   create(@Body() dto: CreateParcelDto) {
     return this.parcelsService.create(dto);
+    
   }
 
   @Get()
