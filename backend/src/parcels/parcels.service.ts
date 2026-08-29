@@ -9,7 +9,7 @@ interface PricingInput {
   receiverLng: number;
 }
 
-interface Parcel {
+export interface Parcel {
   id: number;
   trackingCode: string;
   status: string;
