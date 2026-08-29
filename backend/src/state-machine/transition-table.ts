@@ -1,5 +1,5 @@
 import { ParcelStatus } from '@prisma/client';
-import { TransitionContext, TransitionDefinition, TransitionEvent } from './state-machine.types';
+import { TransitionDefinition, TransitionEvent } from './state-machine.types';
 
 const DEFAULT_MAX_RETRY = 3;
 
