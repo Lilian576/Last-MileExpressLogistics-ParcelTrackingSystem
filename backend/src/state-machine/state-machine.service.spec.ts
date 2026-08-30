@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from '@jest/globals';
 import { Test, TestingModule } from '@nestjs/testing';
 import { StateMachineService } from './state-machine.service';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
-import { TransitionEvent, TransitionActor, TransitionContext } from './state-machine.types';
+import { TransitionEvent, TransitionContext } from './state-machine.types';
 import { ParcelStatus } from '@prisma/client';
 
 
@@ -33,7 +33,7 @@ describe('StateMachineService', () => {
   // Nhóm 2: Kiểm thử validateTransition (Trả về object kết quả)
   it('4. validateTransition thất bại nếu event không tồn tại', () => {
     // Dùng ép kiểu để giả lập event rác
-    const result = service.validateTransition(ParcelStatus.CREATED, 'FAKE_EVENT' as any, 'dispatcher');
+    const result = service.validateTransition(ParcelStatus.CREATED, ('FAKE_EVENT' as unknown) as TransitionEvent, 'dispatcher');
     expect(result.valid).toBe(false);
   });
 
