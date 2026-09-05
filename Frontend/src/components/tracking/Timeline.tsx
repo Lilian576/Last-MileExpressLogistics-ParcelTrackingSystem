@@ -5,7 +5,7 @@ interface Props {
   currentStatus: ParcelStatus;
 }
 
-const BRANCH_STATUSES: ParcelStatus[] = ["FAILED_DELIVERY", "RESCHEDULED", "RETURNED"];
+const BRANCH_STATUSES: ParcelStatus[] = ["DELIVERY_FAILED", "RETURNING", "RETURNED", "CANCELLED", "LOST"];
 
 function formatTime(iso: string) {
   return new Date(iso).toLocaleString("vi-VN", {
@@ -34,7 +34,7 @@ export function Timeline({ history, currentStatus }: Props) {
   return (
     <ul className="timeline">
       {mainItems.map(({ status, event, isDone, isCurrent }) => {
-        // Nếu đơn đã rẽ sang FAILED_DELIVERY, DELIVERED sẽ không xảy ra nữa -> đừng tô "current"
+        // Nếu đơn đã rẽ sang nhánh lỗi/hủy, DELIVERED sẽ không xảy ra nữa -> đừng tô "current"
         const skip = status === "DELIVERED" && branchEvents.length > 0 && !isDone;
         return (
           <li
