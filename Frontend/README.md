@@ -20,65 +20,6 @@ mềm (502045), Nhóm 4 người. Xem phân công đầy đủ tại [`TEAM.md`]
 - **Tra cứu công khai** (`src/components/tracking/`, route `/tracking/:code`):
   xem lịch sử trạng thái + cập nhật real-time qua WebSocket (mock).
 
-### Tuần 3 — Polling tracking (state machine end-to-end)
-- `subscribeToParcel()` trong `src/api/parcelApi.ts` được tách thành 2 chiến lược:
-  `subscribeToParcelPolling()` (dùng REST, gọi `trackParcel()` lặp lại mỗi
-  `POLLING_INTERVAL_MS`, tự dừng khi trạng thái về trạng thái cuối) và
-  `subscribeToParcelWebSocket()` (dùng cho Tuần 4). Chọn qua cờ
-  `REALTIME_MODE: "polling" | "websocket"`.
-
-### Tuần 4 — WebSocket client thật + reconnect
-- `REALTIME_MODE` chuyển sang `"websocket"` — `TrackingPage` nhận cập nhật
-  qua Socket.io thay vì polling.
-- `subscribeToParcelWebSocket()`: bật `reconnection: true` (tự kết nối lại
-  vô hạn, delay tăng dần tới 5s); mỗi lần `connect` (kể cả sau khi mất mạng
-  rồi có lại) đều `emit("join:parcel")` lại **và** gọi `trackParcel()` để
-  resync snapshot mới nhất — tránh bỏ sót event nếu rớt mạng đúng lúc backend
-  emit.
-- Nút demo "🔌 Giả lập mất mạng 3s" trong `TrackingPage` (chỉ hiện khi
-  `USE_MOCK=true`) để demo hành vi reconnect ngay cả khi chưa nối được
-  backend WebSocket thật.
-
-### ⚠️ Đối chiếu với code backend thật (đọc trực tiếp từ repo `backend/src`)
-
-Sau khi đọc code thật của M2/M3, phát hiện vài điểm CẦN THỐNG NHẤT LẠI trước
-khi tắt `USE_MOCK`:
-
-1. **Enum trạng thái đã được sửa khớp 100%** với
-   `backend/prisma/schema.prisma` (enum `ParcelStatus`) và
-   `backend/src/state-machine/transition-table.ts` — 12 trạng thái:
-   `CREATED, PENDING_PICKUP, PICKED_UP, IN_TRANSIT, AT_HUB,
-   OUT_FOR_DELIVERY, DELIVERED, DELIVERY_FAILED, RETURNING, RETURNED,
-   CANCELLED, LOST` (trước đó `types/parcel.ts` dùng enum tự đoán, đã lệch —
-   nay đã đồng bộ).
-2. **`backend/src/tracking/tracking.gateway.ts` hiện chỉ có
-   `@SubscribeMessage('ping')`** trả về `'pong'` — CHƯA có `join:parcel`
-   (room theo trackingCode) và CHƯA emit `parcel.status.updated` khi
-   `StateMachineService` transition thành công. Đây là việc M2 cần hoàn
-   thành theo đúng checklist Tuần 4 của M2 trong `TEAM.md`. Trước khi việc
-   đó xong, để `USE_MOCK=true` — bật `false` sớm sẽ chỉ connect được
-   (ping/pong) nhưng không nhận được cập nhật trạng thái thật.
-3. **`POST /api/parcels` hiện dùng DTO tối giản** (`senderName, senderLat,
-   senderLng, receiverName, receiverLat, receiverLng, weightKg` — tính khoảng
-   cách bằng công thức Haversine), khác với model `Parcel` đầy đủ trong
-   `schema.prisma` (có `receiverPhone`, `receiverAddress` dạng chuỗi,
-   `dimensions`, `codAmount`, và `senderId` lấy từ user đăng nhập chứ không
-   phải nhập tay). `ParcelsService` hiện cũng đang lưu **in-memory**, chưa
-   nối Prisma. → Đây là điểm quan trọng nhất cần họp lại giữa M1 ↔ M2 ↔ M3
-   trước khi tích hợp thật, vì 2 phía đang thiết kế request/response khác
-   nhau khá nhiều.
-4. **`POST /api/parcels` yêu cầu JWT** (`@UseGuards(JwtAuthGuard)`) — nghĩa
-   là sender-app cần có **màn hình đăng nhập** và đính kèm
-   `Authorization: Bearer <token>` trước khi gọi tạo đơn. Hiện tại UI M1
-   chưa có bước đăng nhập nào — cần bổ sung trước khi tắt mock.
-5. `GET /api/parcels/:id` hiện tra theo **id số** (`Number(id)`), không phải
-   theo `trackingCode` — cần thống nhất lại route tra cứu công khai theo
-   `trackingCode` (như M1 đang thiết kế) để không lộ ID tuần tự.
-
-**Khuyến nghị:** giữ `USE_MOCK = true` để tiếp tục demo UI mượt, đồng thời
-đem đúng 5 điểm trên vào buổi họp M1↔M2↔M3 tiếp theo để chốt lại contract
-trước khi nối thật.
-
 ## Cấu trúc thư mục
 
 ```
@@ -112,16 +53,13 @@ export const SOCKET_URL = "https://<domain-backend-thật>";
 
 Các endpoint UI đang mong đợi từ backend (đối chiếu với M2/M3):
 
-| Hành động        | Method & Path (frontend đang gọi) | Method & Path THẬT trong backend hiện tại | Ghi chú |
-|---|---|---|---|
-| Tính phí ship     | `POST /api/parcels/quote`         | `POST /api/parcels/calculate-fee` (DTO khác: lat/lng thay vì province) | Cần thống nhất lại request/response |
-| Tạo đơn           | `POST /api/parcels`               | `POST /api/parcels` (đúng path, khác DTO + cần JWT) | Backend yêu cầu login trước |
-| Tra cứu công khai | `GET /api/public/track/:code`     | Chưa có — chỉ có `GET /api/parcels/:id` (id số) | Cần M2 thêm route theo trackingCode |
-| Danh sách đơn     | `GET /api/parcels/mine` (+ JWT)   | Chưa có | Cần AuthModule (M3) + route mới từ M2 |
-| Realtime tracking | WebSocket `join:parcel` / event `parcel.status.updated`, `parcel.delivery.completed` | Chỉ có `ping`/`pong` demo | TrackingGateway (M2) chưa hoàn thiện theo checklist Tuần 4 |
-
-> Xem chi tiết đầy đủ ở mục "⚠️ Đối chiếu với code backend thật" phía trên —
-> đây là danh sách việc cần chốt lại giữa M1 ↔ M2 ↔ M3 trước khi tắt mock.
+| Hành động        | Method & Path                     | Ghi chú |
+|---|---|---|
+| Tính phí ship     | `POST /api/parcels/quote`         | Pricing engine (M2) |
+| Tạo đơn           | `POST /api/parcels`               | Trả về `Parcel` với `trackingCode` |
+| Tra cứu công khai | `GET /api/public/track/:code`     | 404 nếu không tìm thấy |
+| Danh sách đơn     | `GET /api/parcels/mine` (+ JWT)   | Cần AuthModule (M3) xong trước |
+| Realtime tracking | WebSocket `join:parcel` / event `parcel.status.updated`, `parcel.delivery.completed` | TrackingGateway (M2, Tuần 4) |
 
 ## Chạy dự án
 

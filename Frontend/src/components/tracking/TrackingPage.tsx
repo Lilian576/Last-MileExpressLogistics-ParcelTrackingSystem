@@ -1,17 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { Parcel, ParcelStatus } from "../../types/parcel";
-import {
-  subscribeToParcel,
-  trackParcel,
-  USE_MOCK,
-  REALTIME_MODE,
-  POLLING_INTERVAL_MS,
-} from "../../api/parcelApi";
+import { subscribeToParcel, trackParcel, USE_MOCK } from "../../api/parcelApi";
 import { mockForceTransition } from "../../api/mockBackend";
 import { Timeline } from "./Timeline";
-
-const FINISHED_STATUSES: ParcelStatus[] = ["DELIVERED", "RETURNED", "CANCELLED", "LOST"];
 
 export function TrackingPage() {
   const { code } = useParams<{ code: string }>();
@@ -39,7 +31,7 @@ export function TrackingPage() {
           return;
         }
         setParcel(p);
-        // 2. Nhận cập nhật tiếp theo qua polling hoặc WebSocket (tùy REALTIME_MODE)
+        // 2. Join room realtime để nhận cập nhật tiếp theo
         cleanup = subscribeToParcel(code, (updated) => setParcel(updated), setConnected);
       })
       .finally(() => setLoading(false));
@@ -50,18 +42,6 @@ export function TrackingPage() {
   function handleSearch(e: React.FormEvent) {
     e.preventDefault();
     if (inputCode.trim()) navigate(`/tracking/${inputCode.trim()}`);
-  }
-
-  function simulateNetworkGlitch() {
-    if (!code) return;
-    setConnected(false);
-    setTimeout(async () => {
-      // Mô phỏng đúng hành vi reconnect thật: khi có mạng lại, resync
-      // snapshot mới nhất qua REST trước khi coi là "đã kết nối lại".
-      const fresh = await trackParcel(code);
-      if (fresh) setParcel(fresh);
-      setConnected(true);
-    }, 3000);
   }
 
   return (
@@ -92,13 +72,7 @@ export function TrackingPage() {
             </div>
             <span className={`live-badge ${connected ? "" : "offline"}`}>
               <span className="live-dot" />
-              {REALTIME_MODE === "polling"
-                ? connected
-                  ? `Tự động cập nhật mỗi ${POLLING_INTERVAL_MS / 1000}s`
-                  : "Đã kết thúc theo dõi"
-                : connected
-                ? "Đang theo dõi real-time"
-                : "Mất kết nối"}
+              {connected ? "Đang theo dõi real-time" : "Mất kết nối"}
             </span>
           </div>
 
@@ -109,16 +83,13 @@ export function TrackingPage() {
 
           <Timeline history={parcel.history} currentStatus={parcel.currentStatus} />
 
-          {USE_MOCK && !FINISHED_STATUSES.includes(parcel.currentStatus) && (
+          {USE_MOCK && parcel.currentStatus !== "DELIVERED" && parcel.currentStatus !== "RETURNED" && (
             <div className="demo-controls">
               <div className="muted" style={{ marginBottom: 8 }}>
                 🧪 Công cụ demo (chỉ hiện khi dùng mock) — bấm để giả lập tài xế cập nhật trạng thái ngay lập tức,
                 không cần đợi auto-progress:
               </div>
               <DemoButtons trackingCode={parcel.trackingCode} currentStatus={parcel.currentStatus} />
-              <button className="btn" style={{ marginTop: 8 }} onClick={simulateNetworkGlitch}>
-                🔌 Giả lập mất mạng 3s (test reconnect)
-              </button>
             </div>
           )}
         </>
@@ -128,21 +99,16 @@ export function TrackingPage() {
 }
 
 function DemoButtons({ trackingCode, currentStatus }: { trackingCode: string; currentStatus: ParcelStatus }) {
-  // Rút gọn từ VALID_TRANSITIONS (types/parcel.ts) — chỉ hiện các nhánh
-  // dùng để demo nhanh trên UI, không cần liệt kê hết mọi nhánh phụ.
   const options: Record<ParcelStatus, ParcelStatus[]> = {
-    CREATED: ["PENDING_PICKUP"],
-    PENDING_PICKUP: ["PICKED_UP"],
-    PICKED_UP: ["IN_TRANSIT"],
-    IN_TRANSIT: ["AT_HUB"],
-    AT_HUB: ["OUT_FOR_DELIVERY"],
-    OUT_FOR_DELIVERY: ["DELIVERED", "DELIVERY_FAILED"],
-    DELIVERY_FAILED: ["OUT_FOR_DELIVERY", "RETURNING"],
-    RETURNING: ["RETURNED"],
+    CREATED: ["PICKED_UP"],
+    PICKED_UP: ["AT_SORTING_CENTER"],
+    AT_SORTING_CENTER: ["IN_TRANSIT"],
+    IN_TRANSIT: ["OUT_FOR_DELIVERY"],
+    OUT_FOR_DELIVERY: ["DELIVERED", "FAILED_DELIVERY"],
+    FAILED_DELIVERY: ["RESCHEDULED", "RETURNED"],
+    RESCHEDULED: ["OUT_FOR_DELIVERY"],
     DELIVERED: [],
     RETURNED: [],
-    CANCELLED: [],
-    LOST: [],
   };
   const next = options[currentStatus] ?? [];
   return (

@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { Parcel, ParcelStatus, STATUS_LABEL } from "../../types/parcel";
 import { listMyParcels } from "../../api/parcelApi";
 
-const FAIL_STATUSES: ParcelStatus[] = ["DELIVERY_FAILED", "RETURNING", "RETURNED", "CANCELLED", "LOST"];
+const FAIL_STATUSES: ParcelStatus[] = ["FAILED_DELIVERY", "RETURNED"];
 
 function statusTone(status: ParcelStatus): "ok" | "warn" | "pending" {
   if (status === "DELIVERED") return "ok";
