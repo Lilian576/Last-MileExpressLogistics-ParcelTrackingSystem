@@ -104,9 +104,10 @@ export function mockJoinRoom(trackingCode: string, cb: Listener): () => void {
 // Mục đích: cho phép bạn test UI real-time mà không cần chờ backend thật.
 function scheduleAutoProgress(trackingCode: string) {
   const sequence: ParcelStatus[] = [
+    "PENDING_PICKUP",
     "PICKED_UP",
-    "AT_SORTING_CENTER",
     "IN_TRANSIT",
+    "AT_HUB",
     "OUT_FOR_DELIVERY",
     "DELIVERED",
   ];
