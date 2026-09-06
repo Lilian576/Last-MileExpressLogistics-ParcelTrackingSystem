@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-require-imports */
 const request = require('supertest');
 import { io, Socket } from 'socket.io-client';
 
@@ -38,7 +39,6 @@ describe('Parcel Tracking System (e2e)', () => {
     socket.once('disconnect', () => {
       socket.connect(); // Kích hoạt kết nối lại ngay lập tức
     });
-
     // 3. Bây giờ mới thực hiện giả lập ngắt mạng
     socket.disconnect();
   });
