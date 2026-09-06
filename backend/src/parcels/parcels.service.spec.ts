@@ -1,12 +1,31 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ParcelsService } from './parcels.service';
+import { PrismaService } from '../common/prisma.service';
+import { StateMachineService } from '../state-machine/state-machine.service';
 
 describe('ParcelsService', () => {
   let service: ParcelsService;
 
+  // Prisma giả — chỉ giả lập đúng 2 hàm mà ParcelsService dùng tới
+  const mockPrisma = {
+    parcel: {
+      create: jest.fn(),
+      findMany: jest.fn(),
+      findUnique: jest.fn(),
+    },
+  };
+
+  const mockStateMachine = {
+    assertTransition: jest.fn(),
+  };
+
   beforeEach(async () => {
-    const module: TestingModule = await Test.createTestingModule({
-      providers: [ParcelsService],
+      const module: TestingModule = await Test.createTestingModule({
+        providers: [
+        ParcelsService,
+        { provide: PrismaService, useValue: mockPrisma },
+        { provide: StateMachineService, useValue: mockStateMachine },
+      ],
     }).compile();
 
     service = module.get<ParcelsService>(ParcelsService);
@@ -16,7 +35,7 @@ describe('ParcelsService', () => {
     expect(service).toBeDefined();
   });
 
-    it('should calculate fee correctly', () => {
+  it('should calculate fee correctly', () => {
     const fee = service.calculateFee({
       weightKg: 2,
       senderLat: 10.7769,
@@ -29,34 +48,35 @@ describe('ParcelsService', () => {
     expect(typeof fee).toBe('number');
   });
 
-  it('should create a new parcel with status CREATED', () => {
-    const parcel = service.create({
-      senderName: 'Nguyễn Văn A',
-      senderLat: 10.7769,
-      senderLng: 106.7009,
+  it('should create a new parcel and attach fee', async () => {
+    mockPrisma.parcel.create.mockResolvedValue({
+      id: 'fake-uuid',
+      trackingCode: 'PCL123',
+      currentStatus: 'CREATED',
       receiverName: 'Trần Thị B',
-      receiverLat: 10.8231,
-      receiverLng: 106.6297,
-      weightKg: 2,
     });
 
-    expect(parcel.status).toBe('CREATED');
+    const parcel = await service.create(
+      {
+        receiverName: 'Trần Thị B',
+        receiverPhone: '0900000000',
+        receiverAddress: '123 Đường ABC',
+        weightKg: 2,
+        senderLat: 10.7769,
+        senderLng: 106.7009,
+        receiverLat: 10.8231,
+        receiverLng: 106.6297,
+      },
+      'fake-sender-id',
+    );
+
     expect(parcel.fee).toBeGreaterThan(0);
-    expect(parcel.trackingCode).toBeDefined();
+    expect(mockPrisma.parcel.create).toHaveBeenCalled();
   });
 
-  it('should return the created parcel in findAll', () => {
-    service.create({
-      senderName: 'Nguyễn Văn A',
-      senderLat: 10.7769,
-      senderLng: 106.7009,
-      receiverName: 'Trần Thị B',
-      receiverLat: 10.8231,
-      receiverLng: 106.6297,
-      weightKg: 2,
-    });
-
-    const all = service.findAll();
-    expect(all.length).toBeGreaterThan(0);
+  it('should call findMany when findAll is called', async () => {
+    mockPrisma.parcel.findMany.mockResolvedValue([]);
+    await service.findAll();
+    expect(mockPrisma.parcel.findMany).toHaveBeenCalled();
   });
 });

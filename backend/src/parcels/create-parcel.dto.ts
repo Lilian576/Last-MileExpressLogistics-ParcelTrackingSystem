@@ -1,11 +1,12 @@
 export class CreateParcelDto {
-  senderName: string;
+  receiverName: string;
+  receiverPhone: string;
+  receiverAddress: string;
+  weightKg: number;
+
+  // Dùng để tính phí, không lưu trực tiếp vào Parcel (Prisma không có cột này)
   senderLat: number;
   senderLng: number;
-
-  receiverName: string;
   receiverLat: number;
   receiverLng: number;
-
-  weightKg: number;
 }

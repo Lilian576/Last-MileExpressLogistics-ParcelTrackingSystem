@@ -1,6 +1,9 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../common/prisma.service';
 import { CreateParcelDto } from './create-parcel.dto';
-
+import { UpdateParcelStatusDto } from './update-parcel-status.dto';
+import { StateMachineService } from '../state-machine/state-machine.service';
+import { TransitionActor } from '../state-machine/state-machine.types';
 interface PricingInput {
   weightKg: number;
   senderLat: number;
@@ -9,21 +12,13 @@ interface PricingInput {
   receiverLng: number;
 }
 
-export interface Parcel {
-  id: number;
-  trackingCode: string;
-  status: string;
-  senderName: string;
-  receiverName: string;
-  weightKg: number;
-  fee: number;
-  createdAt: Date;
-}
-
 @Injectable()
 export class ParcelsService {
-  private parcels: Parcel[] = [];
-  private idCounter = 1;
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly stateMachine: StateMachineService,
+  ) {}
+
   private readonly BASE_FEE = 15000; // phí cơ bản (VNĐ)
   private readonly PRICE_PER_KG = 5000; // giá theo kg
   private readonly PRICE_PER_KM = 1000; // giá theo km
@@ -51,7 +46,7 @@ export class ParcelsService {
     lat2: number,
     lng2: number,
   ): number {
-    const R = 6371; // bán kính Trái Đất (km)
+    const R = 6371;
     const dLat = this.toRad(lat2 - lat1);
     const dLng = this.toRad(lng2 - lng1);
 
@@ -70,29 +65,51 @@ export class ParcelsService {
     return (deg * Math.PI) / 180;
   }
 
-    create(dto: CreateParcelDto) {
+  // senderId lấy từ tài khoản đang đăng nhập (JWT), không phải khách tự gõ
+  async create(dto: CreateParcelDto, senderId: string) {
     const fee = this.calculateFee(dto);
 
-    const newParcel = {
-      id: this.idCounter++,
-      trackingCode: 'PCL' + Date.now(),
-      status: 'CREATED',
-      senderName: dto.senderName,
-      receiverName: dto.receiverName,
-      weightKg: dto.weightKg,
-      fee: fee,
-      createdAt: new Date(),
-    };
+    const parcel = await this.prisma.parcel.create({
+      data: {
+        trackingCode: 'PCL' + Date.now(),
+        senderId: senderId,
+        receiverName: dto.receiverName,
+        receiverPhone: dto.receiverPhone,
+        receiverAddress: dto.receiverAddress,
+        weightKg: dto.weightKg,
+      },
+    });
 
-    this.parcels.push(newParcel);
-    return newParcel;
+    // fee không lưu DB (Prisma không có cột này), chỉ tính rồi trả về kèm response
+    return { ...parcel, fee };
   }
 
-    findAll() {
-    return this.parcels;
+  async findAll() {
+    return this.prisma.parcel.findMany();
   }
 
-  findOne(id: number) {
-    return this.parcels.find((p) => p.id === id);
+  async findOne(id: string) {
+    return this.prisma.parcel.findUnique({ where: { id } });
+  }
+
+    async updateStatus(id: string, dto: UpdateParcelStatusDto, actor: TransitionActor) {
+    const parcel = await this.prisma.parcel.findUnique({ where: { id } });
+
+    if (!parcel) {
+      throw new NotFoundException(`Không tìm thấy đơn hàng với id ${id}`);
+    }
+
+    // assertTransition tự throw lỗi nếu transition không hợp lệ — không cần tự kiểm tra thêm
+    const newStatus = this.stateMachine.assertTransition(
+      parcel.currentStatus,
+      dto.event,
+      actor,
+      dto,
+    );
+
+    return this.prisma.parcel.update({
+      where: { id },
+      data: { currentStatus: newStatus },
+    });
   }
 }
