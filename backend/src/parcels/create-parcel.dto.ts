@@ -1,12 +1,30 @@
+import { IsString, IsNumber, IsNotEmpty } from 'class-validator';
+
 export class CreateParcelDto {
+  @IsString()
+  @IsNotEmpty()
   receiverName: string;
+
+  @IsString()
+  @IsNotEmpty()
   receiverPhone: string;
+
+  @IsString()
+  @IsNotEmpty()
   receiverAddress: string;
+
+  @IsNumber()
   weightKg: number;
 
-  // Dùng để tính phí, không lưu trực tiếp vào Parcel (Prisma không có cột này)
+  @IsNumber()
   senderLat: number;
+
+  @IsNumber()
   senderLng: number;
+
+  @IsNumber()
   receiverLat: number;
+
+  @IsNumber()
   receiverLng: number;
 }
