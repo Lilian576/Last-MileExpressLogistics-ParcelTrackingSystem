@@ -8,7 +8,7 @@ export default function App() {
     <div className="app-shell">
       <header className="app-header">
         <div className="brand">
-          Lẹ<span>Mail</span>
+          Cloud<span>Ship</span>
         </div>
         <nav className="app-nav">
           <NavLink to="/" end className={({ isActive }) => (isActive ? "active" : "")}>
