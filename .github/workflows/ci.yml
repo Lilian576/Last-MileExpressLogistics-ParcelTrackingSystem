@@ -27,5 +27,5 @@ jobs:
       run: npm run lint --if-present
       
     - name: Run test (skeleton)
-      working-directory: ./backendv
+      working-directory: ./backend
       run: npm test --if-present
