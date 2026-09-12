@@ -3,6 +3,9 @@ import { PrismaService } from '../common/prisma.service';
 import { CreateParcelDto } from './create-parcel.dto';
 import { UpdateParcelStatusDto } from './update-parcel-status.dto';
 import { StateMachineService } from '../state-machine/state-machine.service';
+import { DriverAssignmentService } from './driver-assignment.service';
+import { AssignCourierDto } from './assign-courier.dto';
+import { TransitionEvent } from '../state-machine/state-machine.types';
 import { TransitionActor } from '../state-machine/state-machine.types';
 interface PricingInput {
   weightKg: number;
@@ -17,6 +20,7 @@ export class ParcelsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly stateMachine: StateMachineService,
+    private readonly driverAssignment: DriverAssignmentService,
   ) {}
 
   private readonly BASE_FEE = 15000; // phí cơ bản (VNĐ)
@@ -111,5 +115,28 @@ export class ParcelsService {
       where: { id },
       data: { currentStatus: newStatus },
     });
+  }
+    async assignCourier(parcelId: string, dto: AssignCourierDto, actor: TransitionActor) {
+    const result = await this.driverAssignment.assignNearestCourier(
+      parcelId,
+      dto.pickupLat,
+      dto.pickupLng,
+    );
+
+    const parcel = await this.prisma.parcel.findUnique({ where: { id: parcelId } });
+
+    const newStatus = this.stateMachine.assertTransition(
+      parcel!.currentStatus,
+      TransitionEvent.ASSIGN_COURIER,
+      actor,
+      { hasAvailableCourier: result.found },
+    );
+
+    const updatedParcel = await this.prisma.parcel.update({
+      where: { id: parcelId },
+      data: { currentStatus: newStatus },
+    });
+
+    return { parcel: updatedParcel, assignmentResult: result };
   }
 }
