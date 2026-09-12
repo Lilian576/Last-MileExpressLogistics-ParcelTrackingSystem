@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ParcelsService } from './parcels.service';
 import { PrismaService } from '../common/prisma.service';
 import { StateMachineService } from '../state-machine/state-machine.service';
+import { DriverAssignmentService } from './driver-assignment.service';
 
 describe('ParcelsService - Pricing Engine', () => {
   let service: ParcelsService;
@@ -18,12 +19,17 @@ describe('ParcelsService - Pricing Engine', () => {
     assertTransition: jest.fn(),
   };
 
+  const mockDriverAssignment = {
+    assignNearestCourier: jest.fn(),
+  };
+
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ParcelsService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: StateMachineService, useValue: mockStateMachine },
+        { provide: DriverAssignmentService, useValue: mockDriverAssignment },
       ],
     }).compile();
 
