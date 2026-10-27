@@ -29,7 +29,7 @@ else quota available
       Service --> API : error (no event)
     else transaction succeeded
       Service -> DB : COMMIT
-      Service -> Hook : onTransition(committedEvent)
+      Service -> Hook : onTransition(parcelId, from, to, actor)
       Hook -> WS : map public status; emit to parcel room
       WS --> Customer : parcel.status.updated
       opt to = DELIVERED

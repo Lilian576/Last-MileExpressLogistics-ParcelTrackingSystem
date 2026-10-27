@@ -27,7 +27,7 @@ Thêm SRS có truy vết 9 user story, UML Use Case/Class/Sequence và 9 bản t
 
 Thêm HTTP rate limiting theo IP: 120 request/60s toàn API, 10 request/60s dùng chung cho login/register; trả 429 và Retry-After. Cấu hình qua RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX, RATE_LIMIT_AUTH_MAX.
 
-Thêm contract TransitionNotifier.onTransition(event) cho M2 gọi sau commit DB thành công. Contract chưa được nối vào ParcelsService/TrackingGateway; chi tiết và khoảng trống tích hợp ở docs/INTEGRATION.md.
+Thêm contract TransitionNotifier.onTransition(parcelId, from, to, actor) cho M2 gọi sau commit DB thành công, cùng kiểu public payload { trackingCode, status, updatedAt }. Contract chưa được nối vào ParcelsService/TrackingGateway; chi tiết và khoảng trống tích hợp ở docs/INTEGRATION.md.
 
 Validation: npm run build thành công; npm test -- --runInBand đạt 5 suites, 23 tests. Đã đối chiếu đủ 9 User Story/Gherkin với docs/m3.md.
 ```

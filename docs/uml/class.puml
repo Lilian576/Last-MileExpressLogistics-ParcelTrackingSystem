@@ -40,7 +40,7 @@ class StateMachineService {
   validateTransition(from, event, actor, context): TransitionResult
 }
 interface TransitionNotifier {
-  onTransition(event): Promise<void>
+  onTransition(parcelId, from, to, actor): Promise<void>
 }
 class TrackingGateway
 User "1" -- "0..*" Parcel : sender
