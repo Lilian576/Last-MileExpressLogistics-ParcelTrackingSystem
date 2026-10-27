@@ -1,0 +1,61 @@
+@startuml
+left to right direction
+actor Customer
+actor Shipper
+actor "Warehouse staff" as Warehouse
+actor Dispatcher
+actor "System scheduler" as Scheduler
+actor "Public viewer" as Viewer
+rectangle "LeMail parcel system" {
+  usecase "US-01 Create parcel" as Create
+  usecase "US-02 Assign courier" as Assign
+  usecase "US-03 Confirm pickup" as Pickup
+  usecase "US-04 Scan / transfer hub" as Hub
+  usecase "US-04 Dispatch last mile" as Dispatch
+  usecase "US-05 Confirm delivery" as Deliver
+  usecase "US-06 Report failure / retry" as Retry
+  usecase "US-07 Return to sender" as Return
+  usecase "US-08 Cancel before pickup" as Cancel
+  usecase "US-09 Detect lost / open claim" as Lost
+  usecase "Public tracking / realtime" as Track
+  usecase "Validate transition" as Validate
+  usecase "Append audit history" as Audit
+}
+Customer --> Create
+Customer --> Cancel
+Customer --> Track
+Viewer --> Track
+Dispatcher --> Assign
+Scheduler --> Assign
+Shipper --> Pickup
+Warehouse --> Hub
+Shipper --> Hub
+Dispatcher --> Dispatch
+Shipper --> Deliver
+Shipper --> Retry
+Scheduler --> Retry
+Shipper --> Return
+Scheduler --> Lost
+Warehouse --> Lost
+Create ..> Validate : <<include>>
+Assign ..> Validate : <<include>>
+Pickup ..> Validate : <<include>>
+Hub ..> Validate : <<include>>
+Dispatch ..> Validate : <<include>>
+Deliver ..> Validate : <<include>>
+Retry ..> Validate : <<include>>
+Return ..> Validate : <<include>>
+Cancel ..> Validate : <<include>>
+Lost ..> Validate : <<include>>
+Create ..> Audit : <<include>>
+Assign ..> Audit : <<include>>
+Pickup ..> Audit : <<include>>
+Hub ..> Audit : <<include>>
+Dispatch ..> Audit : <<include>>
+Deliver ..> Audit : <<include>>
+Retry ..> Audit : <<include>>
+Return ..> Audit : <<include>>
+Cancel ..> Audit : <<include>>
+Lost ..> Audit : <<include>>
+note right of Audit : Only when the state transition is persisted
+@enduml

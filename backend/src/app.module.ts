@@ -1,7 +1,8 @@
-import { StateMachineModule } from './state-machine/state-machine.module'; 
+import { StateMachineModule } from './state-machine/state-machine.module';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
-import { Module } from '@nestjs/common';
+import { MiddlewareConsumer, Module, NestModule } from '@nestjs/common';
+import { RateLimitMiddleware } from './common/rate-limit.middleware';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { ParcelsModule } from './parcels/parcels.module';
@@ -13,9 +14,13 @@ import { TrackingModule } from './tracking/tracking.module';
     ParcelsModule,
     TrackingModule,
     AuthModule,
-StateMachineModule
+    StateMachineModule,
   ],
   controllers: [AppController],
   providers: [AppService],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(RateLimitMiddleware).forRoutes('*path');
+  }
+}
