@@ -1,0 +1,44 @@
+@startuml
+actor Shipper
+participant "HTTP rate limiter" as Limit
+participant "JWT / controller" as API
+participant ParcelsService as Service
+participant StateMachineService as SM
+database PostgreSQL as DB
+participant "M2 TransitionNotifier" as Hook
+participant TrackingGateway as WS
+actor Customer
+Shipper -> Limit : PATCH /api/parcels/:id/status
+alt quota exceeded
+  Limit --> Shipper : 429 + Retry-After
+else quota available
+  Limit -> API : next
+  API -> API : verify JWT and permissions
+  API -> Service : updateStatus(id, dto, actor)
+  Service -> DB : read parcel + trusted guard data
+  Service -> SM : assertTransition(from, trigger, actor, context)
+  alt invalid transition / role / guard
+    SM --> API : 400 / 403
+    API --> Shipper : error (no write / no event)
+  else valid
+    SM --> Service : toStatus
+    Service -> DB : BEGIN; conditional status update;
+    Service -> DB : INSERT history; update assignments / retry count
+    alt write failed or stale status
+      Service -> DB : ROLLBACK
+      Service --> API : error (no event)
+    else transaction succeeded
+      Service -> DB : COMMIT
+      Service -> Hook : onTransition(parcelId, from, to, actor)
+      Hook -> WS : map public status; emit to parcel room
+      WS --> Customer : parcel.status.updated
+      opt to = DELIVERED
+        WS --> Customer : parcel.delivery.completed
+      end
+      Service --> API : updated parcel
+      API --> Shipper : success
+    end
+  end
+end
+note over Service,Hook : Target design; persistence and notifier wiring still required
+@enduml

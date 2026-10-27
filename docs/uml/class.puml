@@ -1,0 +1,59 @@
+@startuml
+class User {
+  id: UUID
+  role: Role
+  email: String
+  passwordHash: String
+}
+class Parcel {
+  id: UUID
+  trackingCode: String
+  currentStatus: ParcelStatus
+  failedAttemptCount: int
+  weightKg: Decimal
+}
+class ParcelStatusHistory {
+  id: UUID
+  status: ParcelStatus
+  createdAt: DateTime
+  note: String
+}
+class Location {
+  id: UUID
+  type: LocationType
+  latitude: Decimal
+  longitude: Decimal
+}
+class DeliveryAssignment {
+  id: UUID
+  assignmentType: AssignmentType
+  status: AssignmentStatus
+  completedAt: DateTime
+}
+class ParcelsService {
+  create(dto, senderId)
+  updateStatus(id, dto, actor)
+  assignCourier(id, dto, actor)
+}
+class StateMachineService {
+  assertTransition(from, event, actor, context): ParcelStatus
+  validateTransition(from, event, actor, context): TransitionResult
+}
+interface TransitionNotifier {
+  onTransition(parcelId, from, to, actor): Promise<void>
+}
+class TrackingGateway
+User "1" -- "0..*" Parcel : sender
+User "1" -- "0..*" DeliveryAssignment : courier
+User "0..1" -- "0..*" ParcelStatusHistory : changed by
+Parcel "1" -- "0..*" ParcelStatusHistory
+Parcel "1" -- "0..*" DeliveryAssignment
+Location "0..1" -- "0..*" Parcel : current/origin/destination
+Location "0..1" -- "0..*" ParcelStatusHistory
+Location "0..1" -- "0..*" Location : parent
+ParcelsService ..> StateMachineService
+ParcelsService ..> Parcel
+ParcelsService ..> TransitionNotifier : proposed after-commit hook
+TrackingGateway ..> TransitionNotifier : M2 adapter (planned)
+note right of TransitionNotifier : Contract only; not wired yet
+@enduml

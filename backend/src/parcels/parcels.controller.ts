@@ -4,6 +4,7 @@ import { ParcelsService } from './parcels.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UpdateParcelStatusDto } from './update-parcel-status.dto';
 import { TransitionActor } from '../state-machine/state-machine.types';
+import { AssignCourierDto } from './assign-courier.dto';
 
 interface CalculateFeeDto {
   weightKg: number;
@@ -59,5 +60,16 @@ export class ParcelsController {
     // Tạm thời map role trong JWT sang actor của state machine
     const actor = req.user.role as TransitionActor;
     return this.parcelsService.updateStatus(id, dto, actor);
+  }
+
+    @UseGuards(JwtAuthGuard)
+  @Patch(':id/assign-courier')
+  assignCourier(
+    @Param('id') id: string,
+    @Body() dto: AssignCourierDto,
+    @Req() req: AuthenticatedRequest,
+  ) {
+    const actor = req.user.role as TransitionActor;
+    return this.parcelsService.assignCourier(id, dto, actor);
   }
 }
