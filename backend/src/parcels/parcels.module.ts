@@ -4,9 +4,10 @@ import { ParcelsService } from './parcels.service';
 import { PrismaService } from '../common/prisma.service';
 import { StateMachineModule } from '../state-machine/state-machine.module';
 import { DriverAssignmentService } from './driver-assignment.service';
+import { TrackingModule } from '../tracking/tracking.module';
 
 @Module({
-  imports: [StateMachineModule],
+  imports: [StateMachineModule, TrackingModule],
   controllers: [ParcelsController],
   providers: [ParcelsService, PrismaService, DriverAssignmentService],
 })

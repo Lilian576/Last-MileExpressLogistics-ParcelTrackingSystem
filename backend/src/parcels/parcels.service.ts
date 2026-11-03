@@ -7,6 +7,8 @@ import { DriverAssignmentService } from './driver-assignment.service';
 import { AssignCourierDto } from './assign-courier.dto';
 import { TransitionEvent } from '../state-machine/state-machine.types';
 import { TransitionActor } from '../state-machine/state-machine.types';
+import { TERMINAL_STATES } from '../state-machine/transition-table';
+import { TrackingGateway } from '../tracking/tracking.gateway';
 interface PricingInput {
   weightKg: number;
   senderLat: number;
@@ -21,6 +23,7 @@ export class ParcelsService {
     private readonly prisma: PrismaService,
     private readonly stateMachine: StateMachineService,
     private readonly driverAssignment: DriverAssignmentService,
+    private readonly trackingGateway: TrackingGateway,
   ) {}
 
   private readonly BASE_FEE = 15000; // phí cơ bản (VNĐ)
@@ -96,7 +99,29 @@ export class ParcelsService {
     return this.prisma.parcel.findUnique({ where: { id } });
   }
 
-    async updateStatus(id: string, dto: UpdateParcelStatusDto, actor: TransitionActor) {
+  // Đơn đang được giao cho shipper này (dùng cho Driver UI). Đơn đã kết thúc không trả về.
+  async findAssignedTo(courierId: string) {
+    const assignments = await this.prisma.deliveryAssignment.findMany({
+      where: {
+        courierId,
+        status: { in: ['assigned', 'accepted', 'in_progress'] },
+        parcel: { currentStatus: { notIn: TERMINAL_STATES } },
+      },
+      include: { parcel: true },
+      orderBy: { assignedAt: 'desc' },
+    });
+    // 1 đơn có thể có nhiều assignment (pickup + last_mile) -> khử trùng theo id
+    return [
+      ...new Map(assignments.map((a) => [a.parcel.id, a.parcel])).values(),
+    ];
+  }
+
+  async updateStatus(
+    id: string,
+    dto: UpdateParcelStatusDto,
+    actor: TransitionActor,
+    changedByUserId?: string,
+  ) {
     const parcel = await this.prisma.parcel.findUnique({ where: { id } });
 
     if (!parcel) {
@@ -111,10 +136,29 @@ export class ParcelsService {
       dto,
     );
 
-    return this.prisma.parcel.update({
-      where: { id },
-      data: { currentStatus: newStatus },
+    // Cập nhật trạng thái + ghi lịch sử trong cùng 1 transaction
+    const [updated, history] = await this.prisma.$transaction([
+      this.prisma.parcel.update({
+        where: { id },
+        data: { currentStatus: newStatus },
+      }),
+      this.prisma.parcelStatusHistory.create({
+        data: {
+          parcelId: id,
+          status: newStatus,
+          changedBy: changedByUserId ?? null,
+        },
+      }),
+    ]);
+
+    // Chỉ emit SAU KHI DB đã lưu thành công
+    this.trackingGateway.emitStatusUpdated({
+      trackingCode: updated.trackingCode,
+      currentStatus: newStatus,
+      event: { status: newStatus, timestamp: history.createdAt.toISOString() },
     });
+
+    return updated;
   }
     async assignCourier(parcelId: string, dto: AssignCourierDto, actor: TransitionActor) {
     const result = await this.driverAssignment.assignNearestCourier(

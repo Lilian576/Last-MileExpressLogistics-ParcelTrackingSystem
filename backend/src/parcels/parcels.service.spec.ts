@@ -3,6 +3,7 @@ import { ParcelsService } from './parcels.service';
 import { PrismaService } from '../common/prisma.service';
 import { StateMachineService } from '../state-machine/state-machine.service';
 import { DriverAssignmentService } from './driver-assignment.service';
+import { TrackingGateway } from '../tracking/tracking.gateway';
 
 describe('ParcelsService - Pricing Engine', () => {
   let service: ParcelsService;
@@ -12,8 +13,14 @@ describe('ParcelsService - Pricing Engine', () => {
       create: jest.fn(),
       findMany: jest.fn(),
       findUnique: jest.fn(),
+      update: jest.fn(),
     },
+    parcelStatusHistory: { create: jest.fn() },
+    deliveryAssignment: { findMany: jest.fn() },
+    $transaction: jest.fn(),
   };
+
+  const mockGateway = { emitStatusUpdated: jest.fn() };
 
   const mockStateMachine = {
     assertTransition: jest.fn(),
@@ -24,12 +31,14 @@ describe('ParcelsService - Pricing Engine', () => {
   };
 
   beforeEach(async () => {
+    jest.clearAllMocks();
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ParcelsService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: StateMachineService, useValue: mockStateMachine },
         { provide: DriverAssignmentService, useValue: mockDriverAssignment },
+        { provide: TrackingGateway, useValue: mockGateway },
       ],
     }).compile();
 
@@ -105,6 +114,68 @@ describe('ParcelsService - Pricing Engine', () => {
         receiverLng: 106.0,
       });
       expect(fee).toBe(15000);
+    });
+  });
+
+  describe('updateStatus', () => {
+    const parcel = { id: 'p1', trackingCode: 'PCL1', currentStatus: 'PENDING_PICKUP' };
+
+    it('lưu DB + ghi history rồi emit event cho đúng trackingCode', async () => {
+      mockPrisma.parcel.findUnique.mockResolvedValue(parcel);
+      mockStateMachine.assertTransition.mockReturnValue('PICKED_UP');
+      const createdAt = new Date('2026-10-27T01:00:00.000Z');
+      mockPrisma.$transaction.mockResolvedValue([
+        { ...parcel, currentStatus: 'PICKED_UP' },
+        { createdAt },
+      ]);
+
+      const result = await service.updateStatus(
+        'p1',
+        { event: 'confirm_pickup' } as never,
+        'shipper',
+        'driver-1',
+      );
+
+      expect(result.currentStatus).toBe('PICKED_UP');
+      expect(mockPrisma.parcelStatusHistory.create).toHaveBeenCalledWith({
+        data: { parcelId: 'p1', status: 'PICKED_UP', changedBy: 'driver-1' },
+      });
+      expect(mockGateway.emitStatusUpdated).toHaveBeenCalledWith({
+        trackingCode: 'PCL1',
+        currentStatus: 'PICKED_UP',
+        event: { status: 'PICKED_UP', timestamp: createdAt.toISOString() },
+      });
+    });
+
+    it('transition không hợp lệ -> throw và KHÔNG emit', async () => {
+      mockPrisma.parcel.findUnique.mockResolvedValue(parcel);
+      mockStateMachine.assertTransition.mockImplementation(() => {
+        throw new Error('invalid');
+      });
+
+      await expect(
+        service.updateStatus('p1', { event: 'confirm_delivery' } as never, 'shipper'),
+      ).rejects.toThrow('invalid');
+      expect(mockGateway.emitStatusUpdated).not.toHaveBeenCalled();
+    });
+
+    it('không tìm thấy đơn -> NotFoundException', async () => {
+      mockPrisma.parcel.findUnique.mockResolvedValue(null);
+      await expect(
+        service.updateStatus('x', { event: 'confirm_pickup' } as never, 'shipper'),
+      ).rejects.toThrow('Không tìm thấy');
+    });
+  });
+
+  describe('findAssignedTo', () => {
+    it('trả về đơn của shipper, khử trùng khi 1 đơn có 2 assignment', async () => {
+      const p = { id: 'p1', trackingCode: 'PCL1' };
+      mockPrisma.deliveryAssignment.findMany.mockResolvedValue([{ parcel: p }, { parcel: p }]);
+      const list = await service.findAssignedTo('driver-1');
+      expect(list).toEqual([p]);
+      expect(mockPrisma.deliveryAssignment.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ courierId: 'driver-1' }) }),
+      );
     });
   });
 });
