@@ -494,6 +494,49 @@ body::before {
   color: var(--warn-amber);
 }
 
+.btn-danger {
+  background: rgba(255, 255, 255, 0.5);
+  border-color: var(--stamp-red-dark);
+  color: var(--stamp-red-dark);
+}
+
+.driver-login {
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+.driver-card {
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.5);
+  padding: 14px 16px;
+}
+
+.driver-phone {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+.driver-proof {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 13.5px;
+}
+
+.driver-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.driver-wait {
+  margin-top: 12px;
+}
+
 @media (max-width: 560px) {
   .field-row {
     grid-template-columns: 1fr;

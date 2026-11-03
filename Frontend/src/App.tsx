@@ -2,6 +2,8 @@ import { NavLink, Route, Routes } from "react-router-dom";
 import { Wizard } from "./components/wizard/Wizard";
 import { TrackingPage } from "./components/tracking/TrackingPage";
 import { OrdersPage } from "./components/orders/OrdersPage";
+import { DriverLoginPage } from "./components/driver/DriverLoginPage";
+import { DriverOrdersPage } from "./components/driver/DriverOrdersPage";
 
 export default function App() {
   return (
@@ -20,6 +22,9 @@ export default function App() {
           <NavLink to="/tracking" className={({ isActive }) => (isActive ? "active" : "")}>
             Tra cứu
           </NavLink>
+          <NavLink to="/driver" className={({ isActive }) => (isActive ? "active" : "")}>
+            Tài xế
+          </NavLink>
         </nav>
       </header>
 
@@ -28,6 +33,8 @@ export default function App() {
         <Route path="/orders" element={<OrdersPage />} />
         <Route path="/tracking" element={<TrackingPage />} />
         <Route path="/tracking/:code" element={<TrackingPage />} />
+        <Route path="/driver/login" element={<DriverLoginPage />} />
+        <Route path="/driver" element={<DriverOrdersPage />} />
       </Routes>
     </div>
   );

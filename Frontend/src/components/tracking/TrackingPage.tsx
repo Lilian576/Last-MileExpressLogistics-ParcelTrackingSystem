@@ -26,6 +26,10 @@ export function TrackingPage() {
   useEffect(() => {
     if (!code) return;
     let cleanup: (() => void) | undefined;
+    // Cờ chống race: nếu effect bị dọn (đổi mã / unmount / StrictMode chạy 2 lần)
+    // trước khi trackParcel() trả về thì KHÔNG được mở subscription nữa, nếu không
+    // socket sẽ bị rò rỉ và nhận event trùng.
+    let cancelled = false;
 
     setLoading(true);
     setNotFound(false);
@@ -34,6 +38,7 @@ export function TrackingPage() {
     // 1. Lấy snapshot hiện tại (GET /api/public/track/:code)
     trackParcel(code)
       .then((p) => {
+        if (cancelled) return;
         if (!p) {
           setNotFound(true);
           return;
@@ -42,9 +47,14 @@ export function TrackingPage() {
         // 2. Nhận cập nhật tiếp theo qua polling hoặc WebSocket (tùy REALTIME_MODE)
         cleanup = subscribeToParcel(code, (updated) => setParcel(updated), setConnected);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
 
-    return () => cleanup?.();
+    return () => {
+      cancelled = true;
+      cleanup?.();
+    };
   }, [code]);
 
   function handleSearch(e: React.FormEvent) {
@@ -103,8 +113,12 @@ export function TrackingPage() {
           </div>
 
           <p className="muted" style={{ marginTop: 12 }}>
-            Từ <b>{parcel.sender.province}</b> đến <b>{parcel.receiver.province}</b> · Người nhận:{" "}
-            {parcel.receiver.fullName}
+            {parcel.sender.province && parcel.receiver.province && (
+              <>
+                Từ <b>{parcel.sender.province}</b> đến <b>{parcel.receiver.province}</b> ·{" "}
+              </>
+            )}
+            Người nhận: {parcel.receiver.fullName}
           </p>
 
           <Timeline history={parcel.history} currentStatus={parcel.currentStatus} />
