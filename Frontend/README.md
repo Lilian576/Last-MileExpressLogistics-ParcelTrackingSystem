@@ -161,9 +161,9 @@ Các endpoint UI đang mong đợi từ backend (đối chiếu với M2/M3):
 |---|---|---|---|
 | Tính phí ship     | `POST /api/parcels/quote`         | `POST /api/parcels/calculate-fee` (DTO khác: lat/lng thay vì province) | Cần thống nhất lại request/response |
 | Tạo đơn           | `POST /api/parcels`               | `POST /api/parcels` (đúng path, khác DTO + cần JWT) | Backend yêu cầu login trước |
-| Tra cứu công khai | `GET /api/public/track/:code`     | Chưa có — chỉ có `GET /api/parcels/:id` (id số) | Cần M2 thêm route theo trackingCode |
+| Tra cứu công khai | `GET /api/public/track/:code`     | Đã có (`PublicTrackingController`) | Chỉ trả trackingCode, trạng thái, tên người nhận, lịch sử — không lộ SĐT/địa chỉ; mã không tồn tại → 404 |
 | Danh sách đơn     | `GET /api/parcels/mine` (+ JWT)   | Chưa có | Cần AuthModule (M3) + route mới từ M2 |
-| Realtime tracking | WebSocket `join:parcel` / event `parcel.status.updated`, `parcel.delivery.completed` | Gateway đã có (xem mục Hợp đồng WebSocket), test WebSocket thật ở backend | Phía client chạy đầy đủ ở chế độ mock; với backend thật còn phụ thuộc route `GET /api/public/track/:code` (chưa có) để lấy snapshot ban đầu |
+| Realtime tracking | WebSocket `join:parcel` / event `parcel.status.updated`, `parcel.delivery.completed` | Đã có (xem mục Hợp đồng WebSocket) | Test tích hợp `backend/src/parcels/parcels.realtime.spec.ts` chạy cả chuỗi: snapshot REST → join room → tài xế PATCH status → nhận event |
 | Driver: đăng nhập | `POST /auth/login` | Đúng (không có prefix `/api`) | |
 | Driver: đơn được giao | `GET /api/parcels/assigned/mine` (+ JWT, role shipper) | Đã thêm | Đơn xuất hiện khi điều phối gọi `PATCH /api/parcels/:id/assign-courier` (tạo `delivery_assignments` status=assigned) |
 | Driver: cập nhật trạng thái | `PATCH /api/parcels/:id/status` | Đúng | Backend nay ghi thêm `parcel_status_history` |

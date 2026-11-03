@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
+import { ParcelStatus } from '@prisma/client';
 import { PrismaService } from '../common/prisma.service';
 import { CreateParcelDto } from './create-parcel.dto';
 import { UpdateParcelStatusDto } from './update-parcel-status.dto';
@@ -97,6 +98,46 @@ export class ParcelsService {
 
   async findOne(id: string) {
     return this.prisma.parcel.findUnique({ where: { id } });
+  }
+
+  // Tra cứu công khai theo mã vận đơn (không cần đăng nhập). Chỉ trả thông tin tối thiểu:
+  // KHÔNG trả SĐT/địa chỉ người nhận hay thông tin người gửi.
+  async findPublicTracking(trackingCode: string) {
+    const parcel = await this.prisma.parcel.findUnique({
+      where: { trackingCode },
+      include: { statusHistory: { orderBy: { createdAt: 'asc' } } },
+    });
+
+    if (!parcel) {
+      throw new NotFoundException(
+        `Không tìm thấy đơn hàng với mã ${trackingCode}`,
+      );
+    }
+
+    const history: {
+      status: ParcelStatus;
+      timestamp: string;
+      note?: string;
+    }[] = parcel.statusHistory.map((h) => ({
+      status: h.status,
+      timestamp: h.createdAt.toISOString(),
+      ...(h.note ? { note: h.note } : {}),
+    }));
+
+    // create() chưa ghi mốc CREATED vào lịch sử -> bổ sung từ createdAt để timeline đủ
+    if (history[0]?.status !== ParcelStatus.CREATED) {
+      history.unshift({
+        status: ParcelStatus.CREATED,
+        timestamp: parcel.createdAt.toISOString(),
+      });
+    }
+
+    return {
+      trackingCode: parcel.trackingCode,
+      currentStatus: parcel.currentStatus,
+      receiverName: parcel.receiverName,
+      history,
+    };
   }
 
   // Đơn đang được giao cho shipper này (dùng cho Driver UI). Đơn đã kết thúc không trả về.

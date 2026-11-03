@@ -113,8 +113,12 @@ export function TrackingPage() {
           </div>
 
           <p className="muted" style={{ marginTop: 12 }}>
-            Từ <b>{parcel.sender.province}</b> đến <b>{parcel.receiver.province}</b> · Người nhận:{" "}
-            {parcel.receiver.fullName}
+            {parcel.sender.province && parcel.receiver.province && (
+              <>
+                Từ <b>{parcel.sender.province}</b> đến <b>{parcel.receiver.province}</b> ·{" "}
+              </>
+            )}
+            Người nhận: {parcel.receiver.fullName}
           </p>
 
           <Timeline history={parcel.history} currentStatus={parcel.currentStatus} />

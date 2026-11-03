@@ -2,6 +2,7 @@ import { io, Socket } from "socket.io-client";
 import {
   CreateParcelRequest,
   Parcel,
+  ParcelEvent,
   ParcelStatus,
   ParcelStatusUpdate,
   QuoteRequest,
@@ -51,10 +52,32 @@ export async function createParcel(req: CreateParcelRequest): Promise<Parcel> {
 
 export async function trackParcel(trackingCode: string): Promise<Parcel | null> {
   if (USE_MOCK) return mockTrackParcel(trackingCode);
-  const res = await fetch(`${API_BASE_URL}/api/public/track/${trackingCode}`);
+  const res = await fetch(`${API_BASE_URL}/api/public/track/${encodeURIComponent(trackingCode)}`);
   if (res.status === 404) return null;
   if (!res.ok) throw new Error("Không tra cứu được đơn hàng.");
-  return res.json();
+  return toParcel((await res.json()) as PublicTrackResponse);
+}
+
+// Backend chỉ trả thông tin tối thiểu cho tra cứu công khai (không có SĐT, địa chỉ,
+// thông tin người gửi) -> các trường còn lại của Parcel để rỗng, UI không dùng tới.
+interface PublicTrackResponse {
+  trackingCode: string;
+  currentStatus: ParcelStatus;
+  receiverName: string;
+  history: ParcelEvent[];
+}
+
+function toParcel(r: PublicTrackResponse): Parcel {
+  const empty = { fullName: "", phone: "", addressLine: "", province: "" };
+  return {
+    trackingCode: r.trackingCode,
+    sender: { ...empty },
+    receiver: { ...empty, fullName: r.receiverName },
+    packageInfo: { weightKg: 0, lengthCm: 0, widthCm: 0, heightCm: 0, category: "OTHER" },
+    feeVnd: 0,
+    currentStatus: r.currentStatus,
+    history: r.history,
+  };
 }
 
 // ---- Danh sách đơn của tôi ----

@@ -179,4 +179,79 @@ describe('ParcelsService - Pricing Engine', () => {
       expect(args.where.courierId).toBe('driver-1');
     });
   });
+  describe('findPublicTracking', () => {
+    const createdAt = new Date('2026-10-27T01:00:00.000Z');
+    const base = {
+      id: 'p1',
+      trackingCode: 'PCL1',
+      currentStatus: 'PICKED_UP',
+      receiverName: 'An',
+      receiverPhone: '0900000000',
+      receiverAddress: '1 Lê Lợi',
+      senderId: 'u1',
+      createdAt,
+    };
+
+    it('trả lịch sử theo thứ tự, bổ sung mốc CREATED khi DB chưa có', async () => {
+      mockPrisma.parcel.findUnique.mockResolvedValue({
+        ...base,
+        statusHistory: [
+          {
+            status: 'PICKED_UP',
+            createdAt: new Date('2026-10-27T02:00:00.000Z'),
+            note: null,
+          },
+        ],
+      });
+
+      const result = await service.findPublicTracking('PCL1');
+
+      expect(result.history).toEqual([
+        { status: 'CREATED', timestamp: createdAt.toISOString() },
+        { status: 'PICKED_UP', timestamp: '2026-10-27T02:00:00.000Z' },
+      ]);
+      expect(result.currentStatus).toBe('PICKED_UP');
+    });
+
+    it('không thêm CREATED lần 2 nếu lịch sử đã bắt đầu bằng CREATED', async () => {
+      mockPrisma.parcel.findUnique.mockResolvedValue({
+        ...base,
+        currentStatus: 'CREATED',
+        statusHistory: [{ status: 'CREATED', createdAt, note: 'tạo đơn' }],
+      });
+
+      const result = await service.findPublicTracking('PCL1');
+
+      expect(result.history).toEqual([
+        {
+          status: 'CREATED',
+          timestamp: createdAt.toISOString(),
+          note: 'tạo đơn',
+        },
+      ]);
+    });
+
+    it('KHÔNG lộ SĐT, địa chỉ người nhận hay thông tin người gửi', async () => {
+      mockPrisma.parcel.findUnique.mockResolvedValue({
+        ...base,
+        statusHistory: [],
+      });
+
+      const result = await service.findPublicTracking('PCL1');
+
+      expect(Object.keys(result).sort()).toEqual([
+        'currentStatus',
+        'history',
+        'receiverName',
+        'trackingCode',
+      ]);
+    });
+
+    it('không tìm thấy mã -> NotFoundException', async () => {
+      mockPrisma.parcel.findUnique.mockResolvedValue(null);
+      await expect(service.findPublicTracking('NOPE')).rejects.toThrow(
+        'Không tìm thấy',
+      );
+    });
+  });
 });
