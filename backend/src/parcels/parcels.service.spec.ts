@@ -173,9 +173,10 @@ describe('ParcelsService - Pricing Engine', () => {
       mockPrisma.deliveryAssignment.findMany.mockResolvedValue([{ parcel: p }, { parcel: p }]);
       const list = await service.findAssignedTo('driver-1');
       expect(list).toEqual([p]);
-      expect(mockPrisma.deliveryAssignment.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ where: expect.objectContaining({ courierId: 'driver-1' }) }),
-      );
+      const [args] = mockPrisma.deliveryAssignment.findMany.mock.calls[0] as [
+        { where: { courierId: string } },
+      ];
+      expect(args.where.courierId).toBe('driver-1');
     });
   });
 });
