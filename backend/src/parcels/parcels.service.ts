@@ -1,20 +1,26 @@
-import { ParcelStatus, Prisma } from '@prisma/client';
 import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { ParcelStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../common/prisma.service';
+import { haversineKm } from '../common/geo';
 import { CreateParcelDto } from './create-parcel.dto';
 import { UpdateParcelStatusDto } from './update-parcel-status.dto';
 import { StateMachineService } from '../state-machine/state-machine.service';
 import { DriverAssignmentService } from './driver-assignment.service';
 import { AssignCourierDto } from './assign-courier.dto';
-import { TransitionEvent } from '../state-machine/state-machine.types';
-import { TransitionActor } from '../state-machine/state-machine.types';
+import {
+  TransitionContext,
+  TransitionEvent,
+  TransitionActor,
+} from '../state-machine/state-machine.types';
 import { TERMINAL_STATES } from '../state-machine/transition-table';
 import { TrackingGateway } from '../tracking/tracking.gateway';
+
 interface PricingInput {
   weightKg: number;
   senderLat: number;
@@ -23,8 +29,23 @@ interface PricingInput {
   receiverLng: number;
 }
 
+// Chỉ các actor nội bộ mới được khai báo vị trí hub; shipper/customer không được tự khai.
+const HUB_REPORTING_ACTORS: TransitionActor[] = [
+  'warehouse_staff',
+  'dispatcher',
+  'admin',
+  'system',
+];
+const ACTIVE_ASSIGNMENT_STATUSES = [
+  'assigned',
+  'accepted',
+  'in_progress',
+] as const;
+
 @Injectable()
 export class ParcelsService {
+  private readonly logger = new Logger(ParcelsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly stateMachine: StateMachineService,
@@ -37,7 +58,7 @@ export class ParcelsService {
   private readonly PRICE_PER_KM = 1000; // giá theo km
 
   calculateFee(input: PricingInput): number {
-    const distanceKm = this.calculateDistance(
+    const distanceKm = haversineKm(
       input.senderLat,
       input.senderLng,
       input.receiverLat,
@@ -50,32 +71,6 @@ export class ParcelsService {
       distanceKm * this.PRICE_PER_KM;
 
     return Math.round(fee);
-  }
-
-  // Công thức Haversine - tính khoảng cách giữa 2 tọa độ (km)
-  private calculateDistance(
-    lat1: number,
-    lng1: number,
-    lat2: number,
-    lng2: number,
-  ): number {
-    const R = 6371;
-    const dLat = this.toRad(lat2 - lat1);
-    const dLng = this.toRad(lng2 - lng1);
-
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(this.toRad(lat1)) *
-        Math.cos(this.toRad(lat2)) *
-        Math.sin(dLng / 2) *
-        Math.sin(dLng / 2);
-
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  }
-
-  private toRad(deg: number): number {
-    return (deg * Math.PI) / 180;
   }
 
   // senderId lấy từ tài khoản đang đăng nhập (JWT), không phải khách tự gõ
@@ -103,6 +98,29 @@ export class ParcelsService {
 
   async findOne(id: string) {
     return this.prisma.parcel.findUnique({ where: { id } });
+  }
+
+  // Chỉ người gửi, shipper đang được giao đơn, hoặc nhân sự nội bộ mới xem được chi tiết
+  async findOneForUser(id: string, user: { userId: string; role: string }) {
+    const parcel = await this.prisma.parcel.findUnique({
+      where: { id },
+      include: { assignments: { select: { courierId: true } } },
+    });
+    if (!parcel) {
+      throw new NotFoundException(`Không tìm thấy đơn hàng với id ${id}`);
+    }
+    const allowed =
+      user.role === 'admin' ||
+      user.role === 'warehouse_staff' ||
+      parcel.senderId === user.userId ||
+      parcel.assignments.some((a) => a.courierId === user.userId);
+    if (!allowed) {
+      // Trả 404 thay vì 403 để không lộ sự tồn tại của đơn người khác
+      throw new NotFoundException(`Không tìm thấy đơn hàng với id ${id}`);
+    }
+    const { assignments, ...rest } = parcel;
+    void assignments;
+    return rest;
   }
 
   // Tra cứu công khai theo mã vận đơn (không cần đăng nhập). Chỉ trả thông tin tối thiểu:
@@ -162,6 +180,95 @@ export class ParcelsService {
     ];
   }
 
+  // Context cho guard của state machine: lấy từ DB / vai trò đã xác thực,
+  // KHÔNG tin các boolean guard do client gửi (xem docs/INTEGRATION.md).
+  private async buildTrustedContext(
+    parcel: { id: string; failedAttemptCount: number; updatedAt: Date },
+    dto: UpdateParcelStatusDto,
+    actor: TransitionActor,
+    userId?: string,
+  ): Promise<TransitionContext> {
+    const isAssignedCourier =
+      actor === 'shipper' && userId
+        ? (await this.prisma.deliveryAssignment.count({
+            where: {
+              parcelId: parcel.id,
+              courierId: userId,
+              status: { in: [...ACTIVE_ASSIGNMENT_STATUSES] },
+            },
+          })) > 0
+        : false;
+
+    const staff = HUB_REPORTING_ACTORS.includes(actor);
+    return {
+      isAssignedCourier,
+      failedAttemptCount: parcel.failedAttemptCount,
+      hoursSinceLastUpdate:
+        (Date.now() - parcel.updatedAt.getTime()) / 3_600_000,
+      // Gán courier phải đi qua PATCH :id/assign-courier, không qua endpoint này
+      hasAvailableCourier: false,
+      isHubLocation: staff ? dto.isHubLocation : false,
+      isFinalHub: staff ? dto.isFinalHub : undefined,
+      // TODO: schema chưa lưu bằng chứng giao hàng -> tạm tin cờ từ shipper
+      hasDeliveryProof: actor === 'shipper' ? dto.hasDeliveryProof : false,
+    };
+  }
+
+  // Ghi trạng thái mới + history (+ side effect) trong 1 transaction, có khóa lạc quan theo
+  // trạng thái cũ để 2 request song song không ghi đè nhau. Emit WebSocket SAU KHI commit.
+  private async commitTransition<T = undefined>(
+    parcel: { id: string; currentStatus: ParcelStatus },
+    newStatus: ParcelStatus,
+    changedBy: string | undefined,
+    sideEffect?: (tx: Prisma.TransactionClient) => Promise<T>,
+    extraData: Prisma.ParcelUpdateManyMutationInput = {},
+  ) {
+    const { updated, history, extra } = await this.prisma.$transaction(
+      async (tx) => {
+        const res = await tx.parcel.updateMany({
+          where: { id: parcel.id, currentStatus: parcel.currentStatus },
+          data: { currentStatus: newStatus, ...extraData },
+        });
+        if (res.count !== 1) {
+          throw new ConflictException(
+            'Trạng thái đơn hàng vừa thay đổi, vui lòng tải lại và thử lại',
+          );
+        }
+        const history = await tx.parcelStatusHistory.create({
+          data: {
+            parcelId: parcel.id,
+            status: newStatus,
+            changedBy: changedBy ?? null,
+          },
+        });
+        const extra = sideEffect ? await sideEffect(tx) : undefined;
+        const updated = await tx.parcel.findUniqueOrThrow({
+          where: { id: parcel.id },
+        });
+        return { updated, history, extra };
+      },
+    );
+
+    // Lỗi emit sau commit KHÔNG được làm request thất bại / giả vờ rollback
+    try {
+      this.trackingGateway.emitStatusUpdated({
+        trackingCode: updated.trackingCode,
+        currentStatus: newStatus,
+        event: {
+          status: newStatus,
+          timestamp: history.createdAt.toISOString(),
+        },
+      });
+    } catch (err) {
+      this.logger.error(
+        `Emit realtime thất bại cho ${updated.trackingCode}`,
+        err instanceof Error ? err.stack : String(err),
+      );
+    }
+
+    return { updated, extra: extra as T };
+  }
+
   async updateStatus(
     id: string,
     dto: UpdateParcelStatusDto,
@@ -169,7 +276,6 @@ export class ParcelsService {
     changedByUserId?: string,
   ) {
     const parcel = await this.prisma.parcel.findUnique({ where: { id } });
-
     if (!parcel) {
       throw new NotFoundException(`Không tìm thấy đơn hàng với id ${id}`);
     }
@@ -178,90 +284,84 @@ export class ParcelsService {
       throw new BadRequestException('Use the assign-courier endpoint');
     }
 
-    // assertTransition tự throw lỗi nếu transition không hợp lệ — không cần tự kiểm tra thêm
+    const ctx = await this.buildTrustedContext(
+      parcel,
+      dto,
+      actor,
+      changedByUserId,
+    );
+    // assertTransition tự throw lỗi nếu transition không hợp lệ
     const newStatus = this.stateMachine.assertTransition(
       parcel.currentStatus,
       dto.event,
       actor,
-      dto,
+      ctx,
     );
 
-    // Cập nhật trạng thái + ghi lịch sử trong cùng 1 transaction
-    const [updated, history] = await this.prisma.$transaction([
-      this.prisma.parcel.update({
-        where: { id },
-        data: { currentStatus: newStatus },
-      }),
-      this.prisma.parcelStatusHistory.create({
-        data: {
-          parcelId: id,
-          status: newStatus,
-          changedBy: changedByUserId ?? null,
-        },
-      }),
-    ]);
-
-    // Chỉ emit SAU KHI DB đã lưu thành công
-    this.trackingGateway.emitStatusUpdated({
-      trackingCode: updated.trackingCode,
-      currentStatus: newStatus,
-      event: { status: newStatus, timestamp: history.createdAt.toISOString() },
-    });
-
+    const { updated } = await this.commitTransition(
+      parcel,
+      newStatus,
+      changedByUserId,
+      undefined,
+      dto.event === TransitionEvent.REPORT_FAILED_DELIVERY
+        ? { failedAttemptCount: { increment: 1 } }
+        : {},
+    );
     return updated;
   }
+
   async assignCourier(
     parcelId: string,
     dto: AssignCourierDto,
     actor: TransitionActor,
+    changedByUserId?: string,
   ) {
-    try {
-      return await this.prisma.$transaction(
-        async (db) => {
-          const parcel = await db.parcel.findUnique({
-            where: { id: parcelId },
-          });
-          if (!parcel) {
-            throw new NotFoundException(
-              `Không tìm thấy đơn hàng với id ${parcelId}`,
-            );
-          }
-
-          const result = await this.driverAssignment.assignNearestCourier(
-            parcelId,
-            dto.pickupLat,
-            dto.pickupLng,
-            db,
-          );
-          const newStatus = this.stateMachine.assertTransition(
-            parcel.currentStatus,
-            TransitionEvent.ASSIGN_COURIER,
-            actor,
-            { hasAvailableCourier: result.found },
-          );
-
-          const updatedParcel = await db.parcel.update({
-            where: { id: parcelId },
-            data: {
-              currentStatus: newStatus,
-              statusHistory: { create: { status: newStatus } },
-            },
-          });
-
-          return { parcel: updatedParcel, assignmentResult: result };
-        },
-        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
-      );
-    } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === 'P2034'
-      ) {
-        throw new ConflictException(
-          'Đơn hàng hoặc tài xế vừa thay đổi. Vui lòng thử lại.',
-        );
-      }
-      throw error;
+    const parcel = await this.prisma.parcel.findUnique({
+      where: { id: parcelId },
+    });
+    if (!parcel) {
+      throw new NotFoundException(`Không tìm thấy đơn hàng với id ${parcelId}`);
     }
+
+    const nearest = await this.driverAssignment.findNearestAvailableCourier(
+      dto.pickupLat,
+      dto.pickupLng,
+    );
+
+    // Validate TRƯỚC khi ghi bất cứ thứ gì: transition bị từ chối thì DB không đổi
+    const newStatus = this.stateMachine.assertTransition(
+      parcel.currentStatus,
+      TransitionEvent.ASSIGN_COURIER,
+      actor,
+      { hasAvailableCourier: nearest.found },
+    );
+    if (!nearest.found) {
+      throw new ConflictException(nearest.reason);
+    }
+
+    const { updated, extra: assignment } = await this.commitTransition(
+      parcel,
+      newStatus,
+      changedByUserId,
+      (tx) =>
+        this.driverAssignment.createPickupAssignment(
+          tx,
+          parcel.id,
+          nearest.courier.id,
+        ),
+    );
+
+    return {
+      parcel: updated,
+      assignmentResult: {
+        found: true,
+        courier: {
+          id: nearest.courier.id,
+          fullName: nearest.courier.fullName,
+        },
+        distanceKm: nearest.distanceKm,
+        assignment,
+      },
+    };
   }
 }

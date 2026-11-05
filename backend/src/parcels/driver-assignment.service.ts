@@ -1,106 +1,71 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
+import { Prisma, User } from '@prisma/client';
 import { PrismaService } from '../common/prisma.service';
-import { AssignmentType, AssignmentStatus, Prisma } from '@prisma/client';
+import { haversineKm } from '../common/geo';
+
+export type NearestCourierResult =
+  | { found: true; courier: User; distanceKm: number }
+  | { found: false; reason: string };
+
+const ACTIVE_ASSIGNMENT_STATUSES = [
+  'assigned',
+  'accepted',
+  'in_progress',
+] as const;
 
 @Injectable()
 export class DriverAssignmentService {
   constructor(private readonly prisma: PrismaService) {}
 
-  // Công thức Haversine - giống hệt cách tính trong ParcelsService
-  private calculateDistance(
-    lat1: number,
-    lng1: number,
-    lat2: number,
-    lng2: number,
-  ): number {
-    const R = 6371;
-    const dLat = this.toRad(lat2 - lat1);
-    const dLng = this.toRad(lng2 - lng1);
-
-    const a =
-      Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-      Math.cos(this.toRad(lat1)) *
-        Math.cos(this.toRad(lat2)) *
-        Math.sin(dLng / 2) *
-        Math.sin(dLng / 2);
-
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-    return R * c;
-  }
-
-  private toRad(deg: number): number {
-    return (deg * Math.PI) / 180;
-  }
-
-  // Tìm shipper gần nhất đang rảnh, gán vào đơn hàng
-  async assignNearestCourier(
-    parcelId: string,
+  // Chỉ TÌM shipper gần nhất đang rảnh, KHÔNG ghi DB.
+  // Việc tạo assignment do ParcelsService làm trong cùng transaction với đổi trạng thái.
+  async findNearestAvailableCourier(
     pickupLat: number,
     pickupLng: number,
-    db: Prisma.TransactionClient = this.prisma,
-  ) {
-    const parcel = await db.parcel.findUnique({ where: { id: parcelId } });
-    if (!parcel) {
-      throw new NotFoundException(`Không tìm thấy đơn hàng với id ${parcelId}`);
-    }
-
-    // Lấy tất cả shipper có vị trí, chưa có assignment nào đang xử lý dở
-    const availableShippers = await db.user.findMany({
+  ): Promise<NearestCourierResult> {
+    const shippers = await this.prisma.user.findMany({
       where: {
         role: 'shipper',
         isActive: true,
         currentLatitude: { not: null },
         currentLongitude: { not: null },
         assignments: {
-          none: {
-            status: { in: ['assigned', 'accepted', 'in_progress'] },
-          },
+          none: { status: { in: [...ACTIVE_ASSIGNMENT_STATUSES] } },
         },
       },
     });
 
-    if (availableShippers.length === 0) {
-      return { found: false, reason: 'Không có shipper nào đang rảnh' };
-    }
-
-    // Tìm shipper gần nhất
-    let nearest = availableShippers[0];
-    let minDistance = this.calculateDistance(
-      pickupLat,
-      pickupLng,
-      Number(nearest.currentLatitude),
-      Number(nearest.currentLongitude),
-    );
-
-    for (const shipper of availableShippers) {
-      const distance = this.calculateDistance(
+    let nearest: { courier: User; distanceKm: number } | null = null;
+    for (const courier of shippers) {
+      const distanceKm = haversineKm(
         pickupLat,
         pickupLng,
-        Number(shipper.currentLatitude),
-        Number(shipper.currentLongitude),
+        Number(courier.currentLatitude),
+        Number(courier.currentLongitude),
       );
-      if (distance < minDistance) {
-        minDistance = distance;
-        nearest = shipper;
+      if (!nearest || distanceKm < nearest.distanceKm) {
+        nearest = { courier, distanceKm };
       }
     }
 
-    // Tạo delivery assignment
-    const assignment = await db.deliveryAssignment.create({
+    if (!nearest) {
+      return { found: false, reason: 'Không có shipper nào đang rảnh' };
+    }
+    return { found: true, ...nearest };
+  }
+
+  createPickupAssignment(
+    tx: Prisma.TransactionClient,
+    parcelId: string,
+    courierId: string,
+  ) {
+    return tx.deliveryAssignment.create({
       data: {
-        parcelId: parcel.id,
-        courierId: nearest.id,
-        assignmentType: AssignmentType.pickup,
-        status: AssignmentStatus.assigned,
+        parcelId,
+        courierId,
+        assignmentType: 'pickup',
+        status: 'assigned',
       },
     });
-
-    const { id, fullName, currentLatitude, currentLongitude } = nearest;
-    return {
-      found: true,
-      courier: { id, fullName, currentLatitude, currentLongitude },
-      distanceKm: minDistance,
-      assignment,
-    };
   }
 }

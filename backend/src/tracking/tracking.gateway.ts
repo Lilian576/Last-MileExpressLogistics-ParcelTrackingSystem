@@ -1,3 +1,5 @@
+import { Logger, Optional } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -7,12 +9,26 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { ParcelStatus } from '@prisma/client';
+import { PrismaService } from '../common/prisma.service';
 
 // Hợp đồng event với Frontend (xem Frontend/README.md, mục "Hợp đồng WebSocket")
 export const TRACKING_EVENTS = {
   STATUS_UPDATED: 'parcel.status.updated',
   DELIVERY_COMPLETED: 'parcel.delivery.completed',
+  LOCATION_UPDATED: 'parcel.location.updated',
 } as const;
+
+// Payload phát cho room tracking mỗi khi tài xế gửi vị trí (event driver:location)
+export interface ParcelLocationPayload {
+  trackingCode: string;
+  lat: number;
+  lng: number;
+  timestamp: string;
+}
+
+// Giới hạn số message mỗi socket: tối đa WS_RATE_MAX_MESSAGES trong WS_RATE_WINDOW_MS
+const WS_RATE_WINDOW_MS = 10_000;
+const WS_RATE_MAX_MESSAGES = 30;
 
 export interface ParcelStatusUpdatePayload {
   trackingCode: string;
@@ -37,9 +53,32 @@ export class TrackingGateway {
   @WebSocketServer()
   server: Server;
 
+  private readonly logger = new Logger(TrackingGateway.name);
+  private readonly buckets = new WeakMap<
+    Socket,
+    { count: number; resetAt: number }
+  >();
+
+  // JwtService / PrismaService là @Optional để gateway vẫn dựng được trong test thuần WebSocket;
+  // thiếu một trong hai thì event driver:location bị từ chối.
+  constructor(
+    @Optional() private readonly jwt?: JwtService,
+    @Optional() private readonly prisma?: PrismaService,
+  ) {}
+
+  private allow(client: Socket): boolean {
+    const now = Date.now();
+    const b = this.buckets.get(client);
+    if (!b || now >= b.resetAt) {
+      this.buckets.set(client, { count: 1, resetAt: now + WS_RATE_WINDOW_MS });
+      return true;
+    }
+    b.count += 1;
+    return b.count <= WS_RATE_MAX_MESSAGES;
+  }
+
   @SubscribeMessage('ping')
-  handlePing(@MessageBody() data: string, @ConnectedSocket() client: Socket) {
-    console.log('Nhận được ping:', data);
+  handlePing(@ConnectedSocket() client: Socket) {
     client.emit('pong', 'pong tu server'); // gửi thẳng lại cho đúng client vừa gửi
   }
 
@@ -49,6 +88,7 @@ export class TrackingGateway {
     @MessageBody() body: unknown,
     @ConnectedSocket() client: Socket,
   ) {
+    if (!this.allow(client)) return { ok: false, error: 'rate_limited' };
     const trackingCode = readTrackingCode(body);
     if (!trackingCode) return { ok: false, error: 'trackingCode is required' };
     await client.join(parcelRoom(trackingCode));
@@ -60,10 +100,69 @@ export class TrackingGateway {
     @MessageBody() body: unknown,
     @ConnectedSocket() client: Socket,
   ) {
+    if (!this.allow(client)) return { ok: false, error: 'rate_limited' };
     const trackingCode = readTrackingCode(body);
     if (!trackingCode) return { ok: false, error: 'trackingCode is required' };
     await client.leave(parcelRoom(trackingCode));
     return { ok: true, trackingCode };
+  }
+
+  // Tài xế gửi vị trí GPS (thật hoặc giả lập, xem scripts/gps-simulator.js).
+  // Cần JWT của shipper trong handshake (auth.token) và phải đang được giao đúng đơn này.
+  @SubscribeMessage('driver:location')
+  async handleDriverLocation(
+    @MessageBody() body: unknown,
+    @ConnectedSocket() client: Socket,
+  ) {
+    if (!this.allow(client)) return { ok: false, error: 'rate_limited' };
+    if (!this.jwt || !this.prisma) return { ok: false, error: 'unavailable' };
+
+    const trackingCode = readTrackingCode(body);
+    const { lat, lng } = (body ?? {}) as { lat?: unknown; lng?: unknown };
+    if (
+      !trackingCode ||
+      typeof lat !== 'number' ||
+      typeof lng !== 'number' ||
+      !(lat >= -90 && lat <= 90) ||
+      !(lng >= -180 && lng <= 180)
+    ) {
+      return { ok: false, error: 'invalid payload' };
+    }
+
+    const token = (client.handshake.auth as { token?: unknown } | undefined)
+      ?.token;
+    let userId: string;
+    try {
+      if (typeof token !== 'string') throw new Error('no token');
+      const claims = await this.jwt.verifyAsync<{ sub: string; role: string }>(
+        token,
+      );
+      if (claims.role !== 'shipper') throw new Error('not shipper');
+      userId = claims.sub;
+    } catch {
+      return { ok: false, error: 'unauthorized' };
+    }
+
+    const assigned = await this.prisma.deliveryAssignment.count({
+      where: {
+        courierId: userId,
+        status: { in: ['assigned', 'accepted', 'in_progress'] },
+        parcel: { trackingCode },
+      },
+    });
+    if (assigned === 0) return { ok: false, error: 'forbidden' };
+
+    const payload: ParcelLocationPayload = {
+      trackingCode,
+      lat,
+      lng,
+      timestamp: new Date().toISOString(),
+    };
+    this.server
+      .to(parcelRoom(trackingCode))
+      .emit(TRACKING_EVENTS.LOCATION_UPDATED, payload);
+    this.logger.debug(`GPS ${trackingCode}: ${lat},${lng}`);
+    return { ok: true };
   }
 
   // Được ParcelsService gọi SAU KHI StateMachineService validate + lưu DB thành công

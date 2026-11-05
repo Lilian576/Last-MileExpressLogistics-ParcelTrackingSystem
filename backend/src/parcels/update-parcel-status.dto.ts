@@ -1,17 +1,11 @@
-import { IsEnum, IsOptional, IsBoolean, IsNumber } from 'class-validator';
+import { IsEnum, IsOptional, IsBoolean } from 'class-validator';
 import { TransitionEvent } from '../state-machine/state-machine.types';
 
+// Chỉ nhận event + các cờ không thể suy ra từ DB. Các giá trị khác (isAssignedCourier,
+// failedAttemptCount, hoursSinceLastUpdate...) server tự lấy từ DB — client gửi cũng bị bỏ.
 export class UpdateParcelStatusDto {
   @IsEnum(TransitionEvent)
   event: TransitionEvent;
-
-  @IsOptional()
-  @IsBoolean()
-  hasAvailableCourier?: boolean;
-
-  @IsOptional()
-  @IsBoolean()
-  isAssignedCourier?: boolean;
 
   @IsOptional()
   @IsBoolean()
@@ -22,18 +16,6 @@ export class UpdateParcelStatusDto {
   isFinalHub?: boolean;
 
   @IsOptional()
-  @IsNumber()
-  hoursSinceLastUpdate?: number;
-
-  @IsOptional()
   @IsBoolean()
   hasDeliveryProof?: boolean;
-
-  @IsOptional()
-  @IsNumber()
-  failedAttemptCount?: number;
-
-  @IsOptional()
-  @IsNumber()
-  maxRetryAttempts?: number;
 }

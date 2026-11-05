@@ -37,7 +37,11 @@ Khi tham số to=DELIVERED, emit thêm `parcel.delivery.completed` vào cùng ro
 
 **Lưu ý tích hợp M1:** Frontend hiện nhận nguyên object Parcel ở cả hai event. Payload chốt ở đây là thông báo snapshot nhỏ; M1 cần sửa handler để tải lại parcel/timeline qua REST, không truyền thẳng payload này vào onUpdate(Parcel). Không đổi REALTIME_MODE trước khi gateway và adapter cùng xong.
 
-**Trạng thái triển khai:** file TypeScript mới là hợp đồng, chưa nối notifier vào ParcelsService và TrackingGateway hiện chỉ ping/pong. API updateStatus hiện chưa ghi history/transaction. M2 cần hoàn tất persistence trước khi nối hook. Lỗi emit sau commit không được báo như rollback; cần log và retry riêng. Nếu cần bảo đảm không mất event khi process chết giữa commit/emit, dùng transactional outbox và worker retry; hook trực tiếp chưa có bảo đảm đó.
+**Trạng thái triển khai (cập nhật):** `ParcelsService.updateStatus` / `assignCourier` ghi trạng thái + `parcel_status_history` (+ `delivery_assignments` khi gán courier) trong một transaction có khóa lạc quan theo trạng thái cũ (race -> 409), rồi mới emit qua `TrackingGateway`; lỗi emit chỉ được log, không làm request thất bại. Context guard của state machine lấy từ DB / vai trò đã xác thực: `isAssignedCourier` (có assignment đang hoạt động), `failedAttemptCount`, `hoursSinceLastUpdate`; `isHubLocation`/`isFinalHub` chỉ nhận từ warehouse_staff/dispatcher/admin/system; `hasAvailableCourier` luôn false ở endpoint status (gán courier đi qua `PATCH /api/parcels/:id/assign-courier`, chỉ admin). Payload event thực tế hiện là `{trackingCode, currentStatus, event:{status, timestamp}}` (đang dùng bởi Frontend) — chưa đổi sang `{trackingCode, status, updatedAt}` ở trên; cần M1/M2/M3 chốt lại một dạng. Chưa nối qua interface `TransitionNotifier.onTransition`; chưa có transactional outbox.
+
+## GPS tài xế (WebSocket)
+
+Tài xế kết nối socket.io với `auth: { token: <JWT shipper> }` và gửi `driver:location` `{ trackingCode, lat, lng }` (ack `{ ok }`). Server kiểm tra JWT, role shipper và assignment đang hoạt động của đúng đơn, rồi phát `parcel.location.updated` `{ trackingCode, lat, lng, timestamp }` vào room `parcel:<trackingCode>`. Mỗi socket tối đa 30 message / 10 giây (`join:parcel`, `leave:parcel`, `driver:location`), vượt thì ack `{ ok:false, error:'rate_limited' }`. Giả lập: `node backend/scripts/gps-simulator.js --token <JWT> --code <trackingCode>`.
 
 ## Rate limiting HTTP
 
