@@ -1,3 +1,5 @@
+import { Logger, Optional } from '@nestjs/common';
+import { JwtService } from '@nestjs/jwt';
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -7,6 +9,7 @@ import {
 } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
 import { ParcelStatus } from '@prisma/client';
+import { PrismaService } from '../common/prisma.service';
 
 // Hợp đồng event với Frontend (xem Frontend/README.md, mục "Hợp đồng WebSocket")
 export const TRACKING_EVENTS = {
@@ -15,17 +18,22 @@ export const TRACKING_EVENTS = {
   LOCATION_UPDATED: 'parcel.location.updated',
 } as const;
 
-export interface ParcelStatusUpdatePayload {
-  trackingCode: string;
-  currentStatus: ParcelStatus;
-  event: { status: ParcelStatus; timestamp: string; note?: string };
-}
-
+// Payload phát cho room tracking mỗi khi tài xế gửi vị trí (event driver:location)
 export interface ParcelLocationPayload {
   trackingCode: string;
   latitude: number;
   longitude: number;
   timestamp: string;
+}
+
+// Giới hạn số message mỗi socket: tối đa WS_RATE_MAX_MESSAGES trong WS_RATE_WINDOW_MS
+const WS_RATE_WINDOW_MS = 10_000;
+const WS_RATE_MAX_MESSAGES = 30;
+
+export interface ParcelStatusUpdatePayload {
+  trackingCode: string;
+  currentStatus: ParcelStatus;
+  event: { status: ParcelStatus; timestamp: string; note?: string };
 }
 
 export const parcelRoom = (trackingCode: string) => `parcel:${trackingCode}`;
@@ -45,9 +53,32 @@ export class TrackingGateway {
   @WebSocketServer()
   server: Server;
 
+  private readonly logger = new Logger(TrackingGateway.name);
+  private readonly buckets = new WeakMap<
+    Socket,
+    { count: number; resetAt: number }
+  >();
+
+  // JwtService / PrismaService là @Optional để gateway vẫn dựng được trong test thuần WebSocket;
+  // thiếu một trong hai thì event driver:location bị từ chối.
+  constructor(
+    @Optional() private readonly jwt?: JwtService,
+    @Optional() private readonly prisma?: PrismaService,
+  ) {}
+
+  private allow(client: Socket): boolean {
+    const now = Date.now();
+    const b = this.buckets.get(client);
+    if (!b || now >= b.resetAt) {
+      this.buckets.set(client, { count: 1, resetAt: now + WS_RATE_WINDOW_MS });
+      return true;
+    }
+    b.count += 1;
+    return b.count <= WS_RATE_MAX_MESSAGES;
+  }
+
   @SubscribeMessage('ping')
-  handlePing(@MessageBody() data: string, @ConnectedSocket() client: Socket) {
-    console.log('Nhận được ping:', data);
+  handlePing(@ConnectedSocket() client: Socket) {
     client.emit('pong', 'pong tu server'); // gửi thẳng lại cho đúng client vừa gửi
   }
 
@@ -57,6 +88,7 @@ export class TrackingGateway {
     @MessageBody() body: unknown,
     @ConnectedSocket() client: Socket,
   ) {
+    if (!this.allow(client)) return { ok: false, error: 'rate_limited' };
     const trackingCode = readTrackingCode(body);
     if (!trackingCode) return { ok: false, error: 'trackingCode is required' };
     await client.join(parcelRoom(trackingCode));
@@ -68,16 +100,23 @@ export class TrackingGateway {
     @MessageBody() body: unknown,
     @ConnectedSocket() client: Socket,
   ) {
+    if (!this.allow(client)) return { ok: false, error: 'rate_limited' };
     const trackingCode = readTrackingCode(body);
     if (!trackingCode) return { ok: false, error: 'trackingCode is required' };
     await client.leave(parcelRoom(trackingCode));
     return { ok: true, trackingCode };
   }
 
-  // Driver app gửi GPS (mỗi 3–5s); server gắn timestamp rồi phát lại cho khách đang xem đơn.
-  // TODO(M2): xác thực JWT shipper + kiểm tra đơn thuộc tài xế (nhánh fix/m2-backend).
+  // Tài xế gửi vị trí GPS (thật hoặc giả lập, xem scripts/gps-simulator.js).
+  // Cần JWT của shipper trong handshake (auth.token) và phải đang được giao đúng đơn này.
   @SubscribeMessage('driver:location')
-  handleDriverLocation(@MessageBody() body: unknown) {
+  async handleDriverLocation(
+    @MessageBody() body: unknown,
+    @ConnectedSocket() client: Socket,
+  ) {
+    if (!this.allow(client)) return { ok: false, error: 'rate_limited' };
+    if (!this.jwt || !this.prisma) return { ok: false, error: 'unavailable' };
+
     const trackingCode = readTrackingCode(body);
     const { latitude, longitude } = (body ?? {}) as {
       latitude?: unknown;
@@ -87,11 +126,35 @@ export class TrackingGateway {
       !trackingCode ||
       typeof latitude !== 'number' ||
       typeof longitude !== 'number' ||
-      Math.abs(latitude) > 90 ||
-      Math.abs(longitude) > 180
+      !(latitude >= -90 && latitude <= 90) ||
+      !(longitude >= -180 && longitude <= 180)
     ) {
-      return { ok: false, error: 'invalid location payload' };
+      return { ok: false, error: 'invalid payload' };
     }
+
+    const token = (client.handshake.auth as { token?: unknown } | undefined)
+      ?.token;
+    let userId: string;
+    try {
+      if (typeof token !== 'string') throw new Error('no token');
+      const claims = await this.jwt.verifyAsync<{ sub: string; role: string }>(
+        token,
+      );
+      if (claims.role !== 'shipper') throw new Error('not shipper');
+      userId = claims.sub;
+    } catch {
+      return { ok: false, error: 'unauthorized' };
+    }
+
+    const assigned = await this.prisma.deliveryAssignment.count({
+      where: {
+        courierId: userId,
+        status: { in: ['assigned', 'accepted', 'in_progress'] },
+        parcel: { trackingCode },
+      },
+    });
+    if (assigned === 0) return { ok: false, error: 'forbidden' };
+
     const payload: ParcelLocationPayload = {
       trackingCode,
       latitude,
@@ -101,6 +164,7 @@ export class TrackingGateway {
     this.server
       .to(parcelRoom(trackingCode))
       .emit(TRACKING_EVENTS.LOCATION_UPDATED, payload);
+    this.logger.debug(`GPS ${trackingCode}: ${latitude},${longitude}`);
     return { ok: true };
   }
 

@@ -1,9 +1,9 @@
-import { IsNumber } from 'class-validator';
+import { IsLatitude, IsLongitude } from 'class-validator';
 
 export class AssignCourierDto {
-  @IsNumber()
+  @IsLatitude()
   pickupLat: number;
 
-  @IsNumber()
+  @IsLongitude()
   pickupLng: number;
 }

@@ -4,6 +4,7 @@ import { SOCKET_URL, USE_MOCK } from "../api/parcelApi";
 import { mockEmitLocation } from "../api/mockBackend";
 import { DriverParcel } from "../types/driver";
 import { ParcelStatus } from "../types/parcel";
+import { getDriverSession } from "./driverSession";
 
 export const GPS_INTERVAL_MS = 4000;
 
@@ -32,7 +33,14 @@ export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean) {
     if (!enabled || !hasActive) return;
 
     let socket: Socket | null = null;
-    if (!USE_MOCK) socket = io(SOCKET_URL, { transports: ["websocket"], reconnection: true });
+    // Server yêu cầu JWT shipper để nhận driver:location (xem TrackingGateway)
+    if (!USE_MOCK) {
+      socket = io(SOCKET_URL, {
+        transports: ["websocket"],
+        reconnection: true,
+        auth: { token: getDriverSession()?.accessToken },
+      });
+    }
 
     let fix: { lat: number; lng: number } | null = null;
     let sim = { ...SIM_START };

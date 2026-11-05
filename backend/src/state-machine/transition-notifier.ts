@@ -30,7 +30,6 @@ export interface ParcelStatusUpdatedPayload {
   updatedAt: string;
 }
 
-export interface ParcelDeliveryCompletedPayload
-  extends ParcelStatusUpdatedPayload {
+export interface ParcelDeliveryCompletedPayload extends ParcelStatusUpdatedPayload {
   status: 'Delivered';
 }
