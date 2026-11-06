@@ -1,4 +1,10 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { PrismaService } from '../common/prisma.service';
 import { CreateParcelDto } from './create-parcel.dto';
 import { UpdateParcelStatusDto } from './update-parcel-status.dto';
@@ -96,11 +102,19 @@ export class ParcelsService {
     return this.prisma.parcel.findUnique({ where: { id } });
   }
 
-    async updateStatus(id: string, dto: UpdateParcelStatusDto, actor: TransitionActor) {
+  async updateStatus(
+    id: string,
+    dto: UpdateParcelStatusDto,
+    actor: TransitionActor,
+  ) {
     const parcel = await this.prisma.parcel.findUnique({ where: { id } });
 
     if (!parcel) {
       throw new NotFoundException(`Không tìm thấy đơn hàng với id ${id}`);
+    }
+
+    if (dto.event === TransitionEvent.ASSIGN_COURIER) {
+      throw new BadRequestException('Use the assign-courier endpoint');
     }
 
     // assertTransition tự throw lỗi nếu transition không hợp lệ — không cần tự kiểm tra thêm
@@ -116,27 +130,58 @@ export class ParcelsService {
       data: { currentStatus: newStatus },
     });
   }
-    async assignCourier(parcelId: string, dto: AssignCourierDto, actor: TransitionActor) {
-    const result = await this.driverAssignment.assignNearestCourier(
-      parcelId,
-      dto.pickupLat,
-      dto.pickupLng,
-    );
+  async assignCourier(
+    parcelId: string,
+    dto: AssignCourierDto,
+    actor: TransitionActor,
+  ) {
+    try {
+      return await this.prisma.$transaction(
+        async (db) => {
+          const parcel = await db.parcel.findUnique({
+            where: { id: parcelId },
+          });
+          if (!parcel) {
+            throw new NotFoundException(
+              `Không tìm thấy đơn hàng với id ${parcelId}`,
+            );
+          }
 
-    const parcel = await this.prisma.parcel.findUnique({ where: { id: parcelId } });
+          const result = await this.driverAssignment.assignNearestCourier(
+            parcelId,
+            dto.pickupLat,
+            dto.pickupLng,
+            db,
+          );
+          const newStatus = this.stateMachine.assertTransition(
+            parcel.currentStatus,
+            TransitionEvent.ASSIGN_COURIER,
+            actor,
+            { hasAvailableCourier: result.found },
+          );
 
-    const newStatus = this.stateMachine.assertTransition(
-      parcel!.currentStatus,
-      TransitionEvent.ASSIGN_COURIER,
-      actor,
-      { hasAvailableCourier: result.found },
-    );
+          const updatedParcel = await db.parcel.update({
+            where: { id: parcelId },
+            data: {
+              currentStatus: newStatus,
+              statusHistory: { create: { status: newStatus } },
+            },
+          });
 
-    const updatedParcel = await this.prisma.parcel.update({
-      where: { id: parcelId },
-      data: { currentStatus: newStatus },
-    });
-
-    return { parcel: updatedParcel, assignmentResult: result };
+          return { parcel: updatedParcel, assignmentResult: result };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      );
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2034'
+      ) {
+        throw new ConflictException(
+          'Đơn hàng hoặc tài xế vừa thay đổi. Vui lòng thử lại.',
+        );
+      }
+      throw error;
+    }
   }
 }

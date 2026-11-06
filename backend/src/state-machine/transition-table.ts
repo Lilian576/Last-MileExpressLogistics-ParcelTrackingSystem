@@ -23,7 +23,7 @@ export const TRANSITION_TABLE: TransitionDefinition[] = [
     from: ParcelStatus.CREATED,
     to: ParcelStatus.PENDING_PICKUP,
     event: TransitionEvent.ASSIGN_COURIER,
-    allowedActors: ['dispatcher', 'system'],
+    allowedActors: ['dispatcher', 'system', 'admin'],
     guardDescription: 'Có shipper khả dụng',
     sideEffect: "Tạo delivery_assignments (status=assigned)",
     guard: (ctx) => ctx.hasAvailableCourier === true,

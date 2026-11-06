@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../common/prisma.service';
-import { AssignmentType, AssignmentStatus } from '@prisma/client';
+import { AssignmentType, AssignmentStatus, Prisma } from '@prisma/client';
 
 @Injectable()
 export class DriverAssignmentService {
@@ -37,16 +37,18 @@ export class DriverAssignmentService {
     parcelId: string,
     pickupLat: number,
     pickupLng: number,
+    db: Prisma.TransactionClient = this.prisma,
   ) {
-    const parcel = await this.prisma.parcel.findUnique({ where: { id: parcelId } });
+    const parcel = await db.parcel.findUnique({ where: { id: parcelId } });
     if (!parcel) {
       throw new NotFoundException(`Không tìm thấy đơn hàng với id ${parcelId}`);
     }
 
     // Lấy tất cả shipper có vị trí, chưa có assignment nào đang xử lý dở
-    const availableShippers = await this.prisma.user.findMany({
+    const availableShippers = await db.user.findMany({
       where: {
         role: 'shipper',
+        isActive: true,
         currentLatitude: { not: null },
         currentLongitude: { not: null },
         assignments: {
@@ -84,7 +86,7 @@ export class DriverAssignmentService {
     }
 
     // Tạo delivery assignment
-    const assignment = await this.prisma.deliveryAssignment.create({
+    const assignment = await db.deliveryAssignment.create({
       data: {
         parcelId: parcel.id,
         courierId: nearest.id,
@@ -93,6 +95,12 @@ export class DriverAssignmentService {
       },
     });
 
-    return { found: true, courier: nearest, distanceKm: minDistance, assignment };
+    const { id, fullName, currentLatitude, currentLongitude } = nearest;
+    return {
+      found: true,
+      courier: { id, fullName, currentLatitude, currentLongitude },
+      distanceKm: minDistance,
+      assignment,
+    };
   }
 }
