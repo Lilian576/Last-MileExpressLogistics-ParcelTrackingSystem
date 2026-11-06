@@ -52,3 +52,11 @@ RATE_LIMIT_AUTH_MAX=10
 Mọi HTTP route dùng chung quota theo IP; /auth/login và /auth/register dùng thêm quota auth chung (gồm cả request thành công/thất bại). OPTIONS không tính. Khi bị chặn trả 429 JSON, Retry-After (giây), X-RateLimit-Limit/Remaining/Reset (Reset là Unix timestamp giây). Quota reset sau cửa sổ tính từ request đầu tiên.
 
 Không đọc X-Forwarded-For trực tiếp; mặc định Express không trust proxy. Nếu chạy sau reverse proxy, cấu hình trust proxy chỉ cho proxy tin cậy trước khi listen; nếu chưa cấu hình, các client sau proxy dùng chung IP/quota. Không bật trust proxy=true khi backend có thể nhận traffic trực tiếp. Store trong memory của mỗi process, dọn bucket hết hạn định kỳ; nhiều replica cần store chung. WebSocket không nằm trong HTTP limiter này, M2 phải xử lý riêng giới hạn message/subscribe.
+
+### M3 — Tài khoản demo và điều phối
+
+Trong thư mục `backend`, cấu hình `DATABASE_URL` và `JWT_SECRET` trong `.env` theo `.env.example`. Đặt khóa JWT riêng cho từng môi trường. Public register chỉ tạo `customer`. Khi nâng cấp dữ liệu từ bản cũ, rà soát các tài khoản có quyền cao đã được tạo qua API đăng ký và xoay vòng khóa JWT nếu từng dùng khóa mặc định.
+
+Chỉ trên cơ sở dữ liệu phát triển, đặt `DEMO_SEED_PASSWORD` (tối thiểu 12 ký tự, tối đa 72 byte), rồi chạy `npx prisma migrate deploy` và `npx prisma db seed`. Seed tạo `admin@example.test`, `shipper1@example.test`, `shipper2@example.test` và hai hub. Chạy lại seed giữ nguyên các bản ghi đã tồn tại. Không dùng tài khoản demo trên môi trường triển khai thật.
+
+Role JWT `admin` được dùng trực tiếp làm actor `admin` cho `ASSIGN_COURIER`. Gọi `PATCH /api/parcels/:id/assign-courier` với tọa độ lấy hàng. Việc gán tài xế, đổi trạng thái và ghi lịch sử cùng nằm trong một giao dịch. Chỉ mục B-tree trên hai cột tọa độ là chỉ mục quan hệ. Luồng hiện tại tính khoảng cách Haversine trong ứng dụng và không thực hiện truy vấn không gian PostGIS.

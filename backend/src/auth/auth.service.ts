@@ -1,6 +1,11 @@
-import { ConflictException, Injectable, UnauthorizedException } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import { Prisma, Role } from '@prisma/client';
 import { PrismaService } from '../common/prisma.service';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -15,37 +20,44 @@ export class AuthService {
   ) {}
 
   async register(dto: RegisterDto) {
-    const existing = await this.prisma.user.findFirst({
-      where: { OR: [{ email: dto.email }, { phone: dto.phone }] },
-    });
-
-    if (existing) {
-      throw new ConflictException('email hoặc phone đã được sử dụng');
-    }
-
     const passwordHash = await bcrypt.hash(dto.password, SALT_ROUNDS);
 
-    const user = await this.prisma.user.create({
-      data: {
-        fullName: dto.fullName,
-        email: dto.email,
-        phone: dto.phone,
-        passwordHash,
-        role: dto.role,
-      },
-    });
+    try {
+      const user = await this.prisma.user.create({
+        data: {
+          fullName: dto.fullName,
+          email: dto.email,
+          phone: dto.phone,
+          passwordHash,
+          role: Role.customer,
+        },
+      });
 
-    return this.buildAuthResponse(user);
+      return this.buildAuthResponse(user);
+    } catch (error) {
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === 'P2002'
+      ) {
+        throw new ConflictException('email hoặc phone đã được sử dụng');
+      }
+      throw error;
+    }
   }
 
   async login(dto: LoginDto) {
-    const user = await this.prisma.user.findUnique({ where: { email: dto.email } });
+    const user = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+    });
 
     if (!user || !user.isActive) {
       throw new UnauthorizedException('email hoặc mật khẩu không đúng');
     }
 
-    const passwordMatches = await bcrypt.compare(dto.password, user.passwordHash);
+    const passwordMatches = await bcrypt.compare(
+      dto.password,
+      user.passwordHash,
+    );
     if (!passwordMatches) {
       throw new UnauthorizedException('email hoặc mật khẩu không đúng');
     }
