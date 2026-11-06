@@ -542,3 +542,17 @@ body::before {
     grid-template-columns: 1fr;
   }
 }
+/* Bản đồ vị trí tài xế (Leaflet) */
+.driver-map {
+  height: 260px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  overflow: hidden;
+}
+.gps-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  font-size: 13.5px;
+}

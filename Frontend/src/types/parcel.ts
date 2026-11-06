@@ -126,3 +126,12 @@ export interface ParcelStatusUpdate {
   currentStatus: ParcelStatus;
   event: ParcelEvent;
 }
+
+// Event `parcel.location.updated` (server -> room) — vị trí GPS mới nhất của tài xế.
+// Tài xế gửi `driver:location` { trackingCode, latitude, longitude }; server gắn timestamp rồi phát lại.
+export interface ParcelLocationUpdate {
+  trackingCode: string;
+  latitude: number;
+  longitude: number;
+  timestamp: string; // ISO string
+}

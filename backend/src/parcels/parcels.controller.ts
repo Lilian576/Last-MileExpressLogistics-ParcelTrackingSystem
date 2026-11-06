@@ -50,6 +50,13 @@ export class ParcelsController {
     return this.parcelsService.findAssignedTo(req.user.userId);
   }
 
+  // Customer UI: "Đơn của tôi" — lọc theo senderId lấy từ JWT (phải đặt TRƯỚC ':id')
+  @UseGuards(JwtAuthGuard)
+  @Get('mine')
+  findMine(@Req() req: AuthenticatedRequest) {
+    return this.parcelsService.findMine(req.user.userId);
+  }
+
   @Get()
   findAll() {
     return this.parcelsService.findAll();

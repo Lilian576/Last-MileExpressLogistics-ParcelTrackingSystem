@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Parcel, ParcelStatus, STATUS_LABEL } from "../../types/parcel";
 import { listMyParcels } from "../../api/parcelApi";
+import { AuthExpiredError } from "../../api/errors";
+import { clearSession } from "../../lib/session";
 
 const FAIL_STATUSES: ParcelStatus[] = ["DELIVERY_FAILED", "RETURNING", "RETURNED", "CANCELLED", "LOST"];
 
@@ -26,6 +28,7 @@ function formatTime(iso: string) {
 }
 
 export function OrdersPage() {
+  const navigate = useNavigate();
   const [parcels, setParcels] = useState<Parcel[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +42,13 @@ export function OrdersPage() {
         if (!cancelled) setParcels(list);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : "Có lỗi xảy ra");
+        if (cancelled) return;
+        if (err instanceof AuthExpiredError) {
+          clearSession(); // token hết hạn -> đăng nhập lại rồi quay về trang này
+          navigate("/login", { replace: true, state: { from: "/orders" } });
+          return;
+        }
+        setError(err instanceof Error ? err.message : "Có lỗi xảy ra");
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -47,13 +56,13 @@ export function OrdersPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [navigate]);
 
   return (
     <div className="paper-card">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 18 }}>
         <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, margin: 0 }}>Đơn hàng của tôi</h3>
-        <Link to="/" className="muted" style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>
+        <Link to="/new" className="muted" style={{ fontFamily: "var(--font-mono)", fontSize: 12.5 }}>
           + Tạo đơn mới
         </Link>
       </div>
@@ -63,8 +72,8 @@ export function OrdersPage() {
 
       {!loading && !error && parcels && parcels.length === 0 && (
         <div className="orders-empty">
-          <p className="muted">Bạn chưa tạo đơn hàng nào trên trình duyệt này.</p>
-          <Link to="/">
+          <p className="muted">Bạn chưa tạo đơn hàng nào.</p>
+          <Link to="/new">
             <button className="btn btn-primary" style={{ marginTop: 10 }}>
               Tạo đơn đầu tiên →
             </button>
@@ -84,11 +93,12 @@ export function OrdersPage() {
                   </span>
                 </div>
                 <div className="order-row-mid">
-                  Đến <b>{p.receiver.fullName}</b> · {p.receiver.province}
+                  Đến <b>{p.receiver.fullName}</b>
+                  {p.receiver.province && <> · {p.receiver.province}</>}
                 </div>
                 <div className="order-row-bottom">
                   <span className="muted">{formatTime(p.history[0]?.timestamp)}</span>
-                  <span className="order-fee">{formatVnd(p.feeVnd)}</span>
+                  {p.feeVnd > 0 && <span className="order-fee">{formatVnd(p.feeVnd)}</span>}
                 </div>
               </Link>
             </li>

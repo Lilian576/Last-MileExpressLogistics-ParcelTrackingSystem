@@ -1,21 +1,8 @@
 import { API_BASE_URL, USE_MOCK } from "./parcelApi";
 import { mockDriverLogin, mockDriverUpdateStatus, mockListAssigned } from "./mockBackend";
-import { AuthExpiredError } from "./errors";
+import { readError } from "./errors";
 import { DriverParcel, DriverSession, ShipperAction } from "../types/driver";
 import { ParcelStatus } from "../types/parcel";
-
-// Lấy thông báo lỗi từ response NestJS: { statusCode, message: string | string[], error }
-async function readError(res: Response, fallback: string): Promise<Error> {
-  if (res.status === 401) return new AuthExpiredError();
-  try {
-    const body = (await res.json()) as { message?: string | string[] };
-    const msg = Array.isArray(body.message) ? body.message.join(", ") : body.message;
-    if (msg) return new Error(msg);
-  } catch {
-    // body không phải JSON -> dùng fallback
-  }
-  return new Error(fallback);
-}
 
 // POST /auth/login (backend/src/auth) — chỉ nhận tài khoản role "shipper"
 export async function driverLogin(email: string, password: string): Promise<DriverSession> {

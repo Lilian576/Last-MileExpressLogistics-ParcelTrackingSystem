@@ -5,20 +5,37 @@ import {
   ParcelEvent,
   ParcelStatus,
   ParcelStatusUpdate,
+  ParcelLocationUpdate,
   QuoteRequest,
   QuoteResponse,
   TERMINAL_STATUSES,
 } from "../types/parcel";
-import { mockCreateParcel, mockGetQuote, mockJoinRoom, mockListParcels, mockTrackParcel } from "./mockBackend";
-import { getMyTrackingCodes } from "../lib/myOrders";
+import {
+  mockCreateParcel,
+  mockGetQuote,
+  mockJoinLocation,
+  mockJoinRoom,
+  mockListParcels,
+  mockTrackParcel,
+} from "./mockBackend";
+import { getSession } from "../lib/session";
+import { AuthExpiredError, readError } from "./errors";
+import {
+  BackendParcel,
+  fromBackendParcel,
+  toCreateParcelDto,
+  toFeeRequest,
+  toQuoteResponse,
+} from "./contract";
 import { applyStatusUpdate, isSnapshotFresh } from "../lib/parcelUpdates";
 
 // ================================================================
-// ĐỔI CHỖ NÀY khi backend thật (ParcelModule + TrackingGateway) sẵn sàng
+// CẤU HÌNH KẾT NỐI BACKEND
 // ================================================================
-// Có thể ghi đè bằng biến môi trường Vite (file .env.local, xem .env.example) mà không cần sửa code:
-//   VITE_USE_MOCK=false VITE_API_BASE_URL=http://localhost:3000 npm run dev
-export const USE_MOCK = import.meta.env.VITE_USE_MOCK !== "false";
+// Mặc định gọi backend thật (NestJS). Muốn chạy không cần backend (demo UI), đặt
+// VITE_USE_MOCK=true trong .env.local (xem .env.example):
+//   VITE_USE_MOCK=true npm run dev
+export const USE_MOCK = import.meta.env.VITE_USE_MOCK === "true";
 export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000"; // NestJS thật, không có global prefix
 export const SOCKET_URL: string = import.meta.env.VITE_SOCKET_URL ?? API_BASE_URL; // Socket.io server URL
 
@@ -28,26 +45,37 @@ export const REALTIME_MODE: "polling" | "websocket" = "websocket";
 export const POLLING_INTERVAL_MS = 4000;
 // ================================================================
 
-export async function getQuote(req: QuoteRequest): Promise<QuoteResponse> {
-  if (USE_MOCK) return mockGetQuote(req);
-  const res = await fetch(`${API_BASE_URL}/api/parcels/quote`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
-  });
-  if (!res.ok) throw new Error("Không tính được phí ship, vui lòng thử lại.");
-  return res.json();
+// Header JWT cho các API cần đăng nhập. Chưa đăng nhập -> AuthExpiredError để UI chuyển về /login.
+function authHeaders(): Record<string, string> {
+  const token = getSession()?.accessToken;
+  if (!token) throw new AuthExpiredError("Vui lòng đăng nhập để tiếp tục.");
+  return { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
 }
 
+// POST /api/parcels/calculate-fee (công khai) — backend trả { fee, currency, details }
+export async function getQuote(req: QuoteRequest): Promise<QuoteResponse> {
+  if (USE_MOCK) return mockGetQuote(req);
+  const res = await fetch(`${API_BASE_URL}/api/parcels/calculate-fee`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(toFeeRequest(req)),
+  });
+  if (!res.ok) throw await readError(res, "Không tính được phí ship, vui lòng thử lại.");
+  return toQuoteResponse(req, (await res.json()) as { fee: number });
+}
+
+// POST /api/parcels (cần JWT) — senderId do backend lấy từ token, không gửi từ client
 export async function createParcel(req: CreateParcelRequest): Promise<Parcel> {
   if (USE_MOCK) return mockCreateParcel(req);
   const res = await fetch(`${API_BASE_URL}/api/parcels`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(req),
+    headers: authHeaders(),
+    body: JSON.stringify(toCreateParcelDto(req)),
   });
-  if (!res.ok) throw new Error("Tạo đơn thất bại, vui lòng thử lại.");
-  return res.json();
+  if (!res.ok) throw await readError(res, "Tạo đơn thất bại, vui lòng thử lại.");
+  const created = fromBackendParcel((await res.json()) as BackendParcel, req.sender.fullName);
+  // Backend chưa lưu thông tin người gửi / kiện hàng -> giữ lại dữ liệu khách vừa nhập cho màn hình thành công
+  return { ...created, sender: req.sender, packageInfo: req.packageInfo, feeVnd: created.feeVnd || req.feeVnd };
 }
 
 export async function trackParcel(trackingCode: string): Promise<Parcel | null> {
@@ -81,20 +109,13 @@ function toParcel(r: PublicTrackResponse): Parcel {
 }
 
 // ---- Danh sách đơn của tôi ----
-// TODO(M3 xong AuthModule): thay bằng GET /api/parcels/mine + header
-// `Authorization: Bearer <jwt>`, bỏ phụ thuộc localStorage. UI (OrdersPage)
-// không cần đổi gì vì đã tách qua hàm này.
+// GET /api/parcels/mine (cần JWT): backend lọc theo senderId lấy từ token.
 export async function listMyParcels(): Promise<Parcel[]> {
-  const codes = getMyTrackingCodes();
-  if (codes.length === 0) return [];
-  if (USE_MOCK) return mockListParcels(codes);
-  const res = await fetch(`${API_BASE_URL}/api/parcels/mine`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ trackingCodes: codes }),
-  });
-  if (!res.ok) throw new Error("Không tải được danh sách đơn hàng.");
-  return res.json();
+  if (USE_MOCK) return mockListParcels();
+  const res = await fetch(`${API_BASE_URL}/api/parcels/mine`, { headers: authHeaders() });
+  if (!res.ok) throw await readError(res, "Không tải được danh sách đơn hàng.");
+  const name = getSession()?.user.fullName ?? "";
+  return ((await res.json()) as BackendParcel[]).map((p) => fromBackendParcel(p, name));
 }
 
 // ---- Chế độ Tuần 3: polling REST (chưa có WebSocket) ----
@@ -218,6 +239,26 @@ export function subscribeToParcel(
     return subscribeToParcelPolling(trackingCode, onUpdate, onConnectionChange);
   }
   return subscribeToParcelWebSocket(trackingCode, onUpdate, onConnectionChange);
+}
+
+// ---- Vị trí tài xế real-time ----
+// Server phát `parcel.location.updated` vào room của đơn (payload: ParcelLocationUpdate)
+// khi tài xế gửi `driver:location`. Hàm này mở socket riêng cho vị trí.
+export function subscribeToLocation(
+  trackingCode: string,
+  onLocation: (loc: ParcelLocationUpdate) => void
+): () => void {
+  if (USE_MOCK) return mockJoinLocation(trackingCode, onLocation);
+
+  const socket: Socket = io(SOCKET_URL, { transports: ["websocket"], reconnection: true });
+  socket.on("connect", () => socket.emit("join:parcel", { trackingCode }));
+  socket.on("parcel.location.updated", (loc: ParcelLocationUpdate) => {
+    if (loc.trackingCode === trackingCode) onLocation(loc);
+  });
+  return () => {
+    socket.emit("leave:parcel", { trackingCode });
+    socket.disconnect();
+  };
 }
 
 export type { ParcelStatus };

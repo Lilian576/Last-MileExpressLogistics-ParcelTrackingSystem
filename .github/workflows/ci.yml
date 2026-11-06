@@ -29,3 +29,18 @@ jobs:
     - name: Run test (skeleton)
       working-directory: ./backend
       run: npm test --if-present
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./Frontend
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-node@v3
+      with:
+        node-version: '20.x'
+    - run: npm ci
+    - run: npm run lint
+    - run: npm test
+    - run: npm run build
