@@ -19,7 +19,12 @@ describe('AuthService', () => {
     phone: '0900000000',
     password: 'example-password',
   };
-  const prisma = { user: { create: jest.fn(), findUnique: jest.fn() } };
+  const prisma = {
+    user: {
+      create: jest.fn<Promise<typeof user>, [Prisma.UserCreateArgs]>(),
+      findUnique: jest.fn(),
+    },
+  };
   const jwt = { sign: jest.fn() };
   const service = new AuthService(
     prisma as unknown as PrismaService,
@@ -37,9 +42,7 @@ describe('AuthService', () => {
       accessToken: 'signed-token',
       user: { role: Role.customer },
     });
-    expect(prisma.user.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ role: Role.customer }),
-    });
+    expect(prisma.user.create.mock.calls[0]?.[0].data.role).toBe(Role.customer);
     expect(jwt.sign).toHaveBeenCalledWith(
       expect.objectContaining({ role: Role.customer }),
     );
