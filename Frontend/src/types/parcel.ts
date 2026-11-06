@@ -116,3 +116,13 @@ export interface Parcel {
   currentStatus: ParcelStatus;
   history: ParcelEvent[];
 }
+
+// Payload event WebSocket `parcel.status.updated` / `parcel.delivery.completed`
+// (khớp ParcelStatusUpdatePayload ở backend/src/tracking/tracking.gateway.ts).
+// Chỉ là "bản vá" (trạng thái mới + 1 mốc lịch sử), client tự ghép vào Parcel
+// đang hiển thị — backend không cần dựng lại cả Parcel của Frontend.
+export interface ParcelStatusUpdate {
+  trackingCode: string;
+  currentStatus: ParcelStatus;
+  event: ParcelEvent;
+}

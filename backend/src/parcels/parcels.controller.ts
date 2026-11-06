@@ -3,6 +3,8 @@ import { CreateParcelDto } from './create-parcel.dto';
 import { ParcelsService } from './parcels.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { UpdateParcelStatusDto } from './update-parcel-status.dto';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
 import { TransitionActor } from '../state-machine/state-machine.types';
 import { AssignCourierDto } from './assign-courier.dto';
 
@@ -40,6 +42,14 @@ export class ParcelsController {
     return this.parcelsService.create(dto, req.user.userId);
   }
 
+  // Driver UI: danh sách đơn được giao cho shipper đang đăng nhập
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('shipper')
+  @Get('assigned/mine')
+  findAssignedToMe(@Req() req: AuthenticatedRequest) {
+    return this.parcelsService.findAssignedTo(req.user.userId);
+  }
+
   @Get()
   findAll() {
     return this.parcelsService.findAll();
@@ -59,7 +69,7 @@ export class ParcelsController {
   ) {
     // Tạm thời map role trong JWT sang actor của state machine
     const actor = req.user.role as TransitionActor;
-    return this.parcelsService.updateStatus(id, dto, actor);
+    return this.parcelsService.updateStatus(id, dto, actor, req.user.userId);
   }
 
     @UseGuards(JwtAuthGuard)

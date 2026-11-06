@@ -1,4 +1,4 @@
-import { Prisma } from '@prisma/client';
+import { ParcelStatus, Prisma } from '@prisma/client';
 import {
   BadRequestException,
   ConflictException,
@@ -13,6 +13,8 @@ import { DriverAssignmentService } from './driver-assignment.service';
 import { AssignCourierDto } from './assign-courier.dto';
 import { TransitionEvent } from '../state-machine/state-machine.types';
 import { TransitionActor } from '../state-machine/state-machine.types';
+import { TERMINAL_STATES } from '../state-machine/transition-table';
+import { TrackingGateway } from '../tracking/tracking.gateway';
 interface PricingInput {
   weightKg: number;
   senderLat: number;
@@ -27,6 +29,7 @@ export class ParcelsService {
     private readonly prisma: PrismaService,
     private readonly stateMachine: StateMachineService,
     private readonly driverAssignment: DriverAssignmentService,
+    private readonly trackingGateway: TrackingGateway,
   ) {}
 
   private readonly BASE_FEE = 15000; // phí cơ bản (VNĐ)
@@ -102,10 +105,68 @@ export class ParcelsService {
     return this.prisma.parcel.findUnique({ where: { id } });
   }
 
+  // Tra cứu công khai theo mã vận đơn (không cần đăng nhập). Chỉ trả thông tin tối thiểu:
+  // KHÔNG trả SĐT/địa chỉ người nhận hay thông tin người gửi.
+  async findPublicTracking(trackingCode: string) {
+    const parcel = await this.prisma.parcel.findUnique({
+      where: { trackingCode },
+      include: { statusHistory: { orderBy: { createdAt: 'asc' } } },
+    });
+
+    if (!parcel) {
+      throw new NotFoundException(
+        `Không tìm thấy đơn hàng với mã ${trackingCode}`,
+      );
+    }
+
+    const history: {
+      status: ParcelStatus;
+      timestamp: string;
+      note?: string;
+    }[] = parcel.statusHistory.map((h) => ({
+      status: h.status,
+      timestamp: h.createdAt.toISOString(),
+      ...(h.note ? { note: h.note } : {}),
+    }));
+
+    // create() chưa ghi mốc CREATED vào lịch sử -> bổ sung từ createdAt để timeline đủ
+    if (history[0]?.status !== ParcelStatus.CREATED) {
+      history.unshift({
+        status: ParcelStatus.CREATED,
+        timestamp: parcel.createdAt.toISOString(),
+      });
+    }
+
+    return {
+      trackingCode: parcel.trackingCode,
+      currentStatus: parcel.currentStatus,
+      receiverName: parcel.receiverName,
+      history,
+    };
+  }
+
+  // Đơn đang được giao cho shipper này (dùng cho Driver UI). Đơn đã kết thúc không trả về.
+  async findAssignedTo(courierId: string) {
+    const assignments = await this.prisma.deliveryAssignment.findMany({
+      where: {
+        courierId,
+        status: { in: ['assigned', 'accepted', 'in_progress'] },
+        parcel: { currentStatus: { notIn: TERMINAL_STATES } },
+      },
+      include: { parcel: true },
+      orderBy: { assignedAt: 'desc' },
+    });
+    // 1 đơn có thể có nhiều assignment (pickup + last_mile) -> khử trùng theo id
+    return [
+      ...new Map(assignments.map((a) => [a.parcel.id, a.parcel])).values(),
+    ];
+  }
+
   async updateStatus(
     id: string,
     dto: UpdateParcelStatusDto,
     actor: TransitionActor,
+    changedByUserId?: string,
   ) {
     const parcel = await this.prisma.parcel.findUnique({ where: { id } });
 
@@ -125,10 +186,29 @@ export class ParcelsService {
       dto,
     );
 
-    return this.prisma.parcel.update({
-      where: { id },
-      data: { currentStatus: newStatus },
+    // Cập nhật trạng thái + ghi lịch sử trong cùng 1 transaction
+    const [updated, history] = await this.prisma.$transaction([
+      this.prisma.parcel.update({
+        where: { id },
+        data: { currentStatus: newStatus },
+      }),
+      this.prisma.parcelStatusHistory.create({
+        data: {
+          parcelId: id,
+          status: newStatus,
+          changedBy: changedByUserId ?? null,
+        },
+      }),
+    ]);
+
+    // Chỉ emit SAU KHI DB đã lưu thành công
+    this.trackingGateway.emitStatusUpdated({
+      trackingCode: updated.trackingCode,
+      currentStatus: newStatus,
+      event: { status: newStatus, timestamp: history.createdAt.toISOString() },
     });
+
+    return updated;
   }
   async assignCourier(
     parcelId: string,
