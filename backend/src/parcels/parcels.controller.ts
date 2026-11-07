@@ -1,4 +1,13 @@
-import { Body, Controller, Post, Get, Param, UseGuards, Req, Patch } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Post,
+  Get,
+  Param,
+  UseGuards,
+  Req,
+  Patch,
+} from '@nestjs/common';
 import { CreateParcelDto } from './create-parcel.dto';
 import { ParcelsService } from './parcels.service';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -50,7 +59,7 @@ export class ParcelsController {
     return this.parcelsService.findOne(id);
   }
 
-    @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard)
   @Patch(':id/status')
   updateStatus(
     @Param('id') id: string,
@@ -62,7 +71,7 @@ export class ParcelsController {
     return this.parcelsService.updateStatus(id, dto, actor);
   }
 
-    @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard)
   @Patch(':id/assign-courier')
   assignCourier(
     @Param('id') id: string,
