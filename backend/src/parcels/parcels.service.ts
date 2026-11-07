@@ -96,7 +96,11 @@ export class ParcelsService {
     return this.prisma.parcel.findUnique({ where: { id } });
   }
 
-    async updateStatus(id: string, dto: UpdateParcelStatusDto, actor: TransitionActor) {
+  async updateStatus(
+    id: string,
+    dto: UpdateParcelStatusDto,
+    actor: TransitionActor,
+  ) {
     const parcel = await this.prisma.parcel.findUnique({ where: { id } });
 
     if (!parcel) {
@@ -116,14 +120,20 @@ export class ParcelsService {
       data: { currentStatus: newStatus },
     });
   }
-    async assignCourier(parcelId: string, dto: AssignCourierDto, actor: TransitionActor) {
+  async assignCourier(
+    parcelId: string,
+    dto: AssignCourierDto,
+    actor: TransitionActor,
+  ) {
     const result = await this.driverAssignment.assignNearestCourier(
       parcelId,
       dto.pickupLat,
       dto.pickupLng,
     );
 
-    const parcel = await this.prisma.parcel.findUnique({ where: { id: parcelId } });
+    const parcel = await this.prisma.parcel.findUnique({
+      where: { id: parcelId },
+    });
 
     const newStatus = this.stateMachine.assertTransition(
       parcel!.currentStatus,

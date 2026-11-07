@@ -38,7 +38,9 @@ export class DriverAssignmentService {
     pickupLat: number,
     pickupLng: number,
   ) {
-    const parcel = await this.prisma.parcel.findUnique({ where: { id: parcelId } });
+    const parcel = await this.prisma.parcel.findUnique({
+      where: { id: parcelId },
+    });
     if (!parcel) {
       throw new NotFoundException(`Không tìm thấy đơn hàng với id ${parcelId}`);
     }
@@ -93,6 +95,11 @@ export class DriverAssignmentService {
       },
     });
 
-    return { found: true, courier: nearest, distanceKm: minDistance, assignment };
+    return {
+      found: true,
+      courier: nearest,
+      distanceKm: minDistance,
+      assignment,
+    };
   }
 }
