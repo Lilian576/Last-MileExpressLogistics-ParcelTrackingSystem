@@ -6,6 +6,7 @@ import { DriverParcel, ShipperAction } from "../../types/driver";
 import { TERMINAL_STATUSES } from "../../types/parcel";
 import { clearDriverSession, getDriverSession } from "../../lib/driverSession";
 import { DriverParcelCard } from "./DriverParcelCard";
+import { useDriverGps } from "../../lib/driverGps";
 
 const REFRESH_MS = 15000;
 
@@ -26,6 +27,8 @@ export function DriverOrdersPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<Record<string, string>>({});
+  const [shareGps, setShareGps] = useState(true);
+  const gps = useDriverGps(parcels, shareGps);
 
   const logout = useCallback(() => {
     clearDriverSession();
@@ -82,6 +85,17 @@ export function DriverOrdersPage() {
           </button>
         </div>
       </div>
+
+      <label className="gps-toggle">
+        <input type="checkbox" checked={shareGps} onChange={(e) => setShareGps(e.target.checked)} />
+        Chia sẻ vị trí cho khách khi đang giao
+        {gps.active && (
+          <span className="muted">
+            · {gps.source === "gps" ? "GPS thiết bị" : "GPS giả lập"}
+            {gps.lastSent && ` · gửi lúc ${gps.lastSent.toLocaleTimeString("vi-VN")}`}
+          </span>
+        )}
+      </label>
 
       {parcels === null && !loadError && <div className="muted">Đang tải danh sách đơn...</div>}
       {loadError && (

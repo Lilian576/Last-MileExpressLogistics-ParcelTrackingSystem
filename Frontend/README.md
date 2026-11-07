@@ -71,7 +71,7 @@ công (cùng transaction ghi `parcel_status_history`).
 ### Demo 2 màn hình song song (chế độ mock, không cần backend)
 `mockBackend` lưu dữ liệu vào `localStorage` và phát event qua `BroadcastChannel`,
 nên 2 tab cùng trình duyệt dùng chung dữ liệu:
-1. Tab A: tạo đơn ở `/`, mở `/tracking/<mã>`; bấm nút demo `→ PENDING_PICKUP`
+1. Tab A: đăng ký/đăng nhập, tạo đơn ở `/new`, mở `/tracking/<mã>`; bấm nút demo `→ PENDING_PICKUP`
    (đóng vai điều phối gán tài xế).
 2. Tab B: `/driver/login` (`driver@demo.vn` / `123456`) → bấm "Đã lấy hàng" …
    → tab A cập nhật ngay, không reload.
@@ -184,3 +184,30 @@ npm run lint      # oxlint
 
 React 19 + TypeScript + Vite, React Router v7, Socket.io-client (cho realtime
 tracking thật ở Tuần 4).
+
+
+## Cập nhật theo báo cáo đánh giá giảng viên (M1)
+
+**Chạy với backend thật (mặc định):** `cd backend && npm run start:dev` rồi `cd Frontend && npm run dev`.
+Muốn chạy không cần backend: `VITE_USE_MOCK=true npm run dev` (xem `.env.example`).
+
+Luồng demo dữ liệu thật: **đăng ký → đăng nhập → tạo đơn → xem "Đơn của tôi" → theo dõi real-time**.
+
+| Hạng mục | Thay đổi |
+|---|---|
+| Đăng ký / đăng nhập khách | `components/auth/{LoginPage,RegisterPage,ProtectedRoute}.tsx`, `api/authApi.ts`, `lib/session.ts`; `/new` và `/orders` yêu cầu đăng nhập, 401 → về `/login` |
+| Tạo đơn thật | `api/contract.ts` ánh xạ form → `CreateParcelDto` (tỉnh → toạ độ ở `lib/geo.ts`), gửi `Authorization: Bearer` |
+| Tính phí | `POST /api/parcels/calculate-fee`, breakdown cộng khớp số backend trả về |
+| Đơn của tôi | `GET /api/parcels/mine` (JWT); bỏ phụ thuộc `myOrders.ts` (chỉ còn dùng cho mock) |
+| Vị trí tài xế | Driver app phát `driver:location` mỗi 4s (GPS thiết bị hoặc giả lập); trang tracking nhận `parcel.location.updated` và vẽ bản đồ Leaflet/OSM |
+| Dọn repo | Xóa thư mục `src/` trùng ở gốc |
+| Test | Vitest + Testing Library: `parcelUpdates`, `contract`, `Wizard`, `driverGps` (`npm test`) |
+
+### Hợp đồng bổ sung với backend (cần M2 xác nhận)
+| Chiều | Event / API | Payload |
+|---|---|---|
+| client → server | `driver:location` | `{ trackingCode, latitude, longitude }` |
+| server → room | `parcel.location.updated` | `{ trackingCode, latitude, longitude, timestamp }` |
+| REST | `GET /api/parcels/mine` (JWT) | `Parcel[]` kèm `statusHistory` |
+
+Backend đã thêm bản tối thiểu của hai mục này (`parcels.controller.ts`, `tracking.gateway.ts`); phí (`feeVnd`) chưa lưu DB nên "Đơn của tôi" ẩn phí cho tới khi M2 thêm cột.

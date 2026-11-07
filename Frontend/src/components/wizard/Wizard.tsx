@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Address, PackageInfo, QuoteResponse } from "../../types/parcel";
 import { createParcel, getQuote } from "../../api/parcelApi";
-import { addMyTrackingCode } from "../../lib/myOrders";
+import { AuthExpiredError } from "../../api/errors";
+import { clearSession } from "../../lib/session";
 import { StepSenderReceiver } from "./StepSenderReceiver";
 import { StepPackageInfo } from "./StepPackageInfo";
 import { StepReview } from "./StepReview";
@@ -20,6 +22,7 @@ const emptyPackage: PackageInfo = {
 };
 
 export function Wizard() {
+  const navigate = useNavigate();
   const [step, setStep] = useState(0); // 0..3
   const [sender, setSender] = useState<Address>(emptyAddress);
   const [receiver, setReceiver] = useState<Address>(emptyAddress);
@@ -95,10 +98,14 @@ export function Wizard() {
       setSubmitError(null);
       try {
         const parcel = await createParcel({ sender, receiver, packageInfo, feeVnd: quote.feeVnd });
-        addMyTrackingCode(parcel.trackingCode);
         setTrackingCode(parcel.trackingCode);
         setStep(3);
       } catch (err) {
+        if (err instanceof AuthExpiredError) {
+          clearSession(); // token hết hạn -> đăng nhập lại rồi quay về
+          navigate("/login", { replace: true, state: { from: "/new" } });
+          return;
+        }
         setSubmitError(err instanceof Error ? err.message : "Có lỗi xảy ra");
       } finally {
         setSubmitting(false);

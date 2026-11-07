@@ -101,6 +101,14 @@ export class ParcelsService {
     return this.prisma.parcel.findMany();
   }
 
+  async findMine(senderId: string) {
+    return this.prisma.parcel.findMany({
+      where: { senderId },
+      include: { statusHistory: { orderBy: { createdAt: 'asc' } } },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+
   async findOne(id: string) {
     return this.prisma.parcel.findUnique({ where: { id } });
   }

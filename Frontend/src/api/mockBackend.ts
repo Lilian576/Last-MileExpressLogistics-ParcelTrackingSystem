@@ -2,6 +2,7 @@ import {
   Parcel,
   ParcelStatus,
   ParcelStatusUpdate,
+  ParcelLocationUpdate,
   TERMINAL_STATUSES,
   isValidTransition,
   QuoteRequest,
@@ -10,6 +11,8 @@ import {
 } from "../types/parcel";
 import { DriverParcel, DriverSession, SHIPPER_ACTIONS, ShipperEvent } from "../types/driver";
 import { AuthExpiredError } from "./errors";
+import { AuthSession, RegisterRequest } from "../types/auth";
+import { addMyTrackingCode, getMyTrackingCodes } from "../lib/myOrders";
 
 // ---- "Database" giả lập ----
 // Lưu trong localStorage (+ bản dự phòng trong bộ nhớ nếu localStorage bị chặn) để
@@ -51,20 +54,45 @@ function putParcel(parcel: Parcel) {
 // ---- Pub/sub giả lập kênh WebSocket (thay cho socket.io server thật) ----
 // Phát trong tab hiện tại + BroadcastChannel sang các tab khác.
 type StatusListener = (update: ParcelStatusUpdate) => void;
+type LocationListener = (loc: ParcelLocationUpdate) => void;
 const listenersByCode = new Map<string, Set<StatusListener>>();
+const locationListenersByCode = new Map<string, Set<LocationListener>>();
 
-function dispatchLocal(update: ParcelStatusUpdate) {
-  listenersByCode.get(update.trackingCode)?.forEach((cb) => cb(structuredClone(update)));
+type ChannelMessage =
+  | { kind: "status"; update: ParcelStatusUpdate }
+  | { kind: "location"; loc: ParcelLocationUpdate };
+
+function dispatchLocal(msg: ChannelMessage) {
+  if (msg.kind === "status") {
+    listenersByCode.get(msg.update.trackingCode)?.forEach((cb) => cb(structuredClone(msg.update)));
+  } else {
+    locationListenersByCode.get(msg.loc.trackingCode)?.forEach((cb) => cb({ ...msg.loc }));
+  }
 }
 
 const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lemail-mock") : null;
 if (channel) {
-  channel.onmessage = (e: MessageEvent<ParcelStatusUpdate>) => dispatchLocal(e.data);
+  channel.onmessage = (e: MessageEvent<ChannelMessage>) => dispatchLocal(e.data);
+}
+
+function emit(msg: ChannelMessage) {
+  dispatchLocal(msg);
+  channel?.postMessage(msg);
 }
 
 function emitUpdate(update: ParcelStatusUpdate) {
-  dispatchLocal(update);
-  channel?.postMessage(update);
+  emit({ kind: "status", update });
+}
+
+// Mock của socket `driver:location` -> server phát `parcel.location.updated`
+export function mockEmitLocation(trackingCode: string, latitude: number, longitude: number) {
+  emit({ kind: "location", loc: { trackingCode, latitude, longitude, timestamp: new Date().toISOString() } });
+}
+
+export function mockJoinLocation(trackingCode: string, cb: LocationListener): () => void {
+  if (!locationListenersByCode.has(trackingCode)) locationListenersByCode.set(trackingCode, new Set());
+  locationListenersByCode.get(trackingCode)!.add(cb);
+  return () => locationListenersByCode.get(trackingCode)?.delete(cb);
 }
 
 // Đổi trạng thái + ghi lịch sử + phát event (dùng chung cho tài xế và nút demo)
@@ -122,6 +150,7 @@ export async function mockCreateParcel(req: CreateParcelRequest): Promise<Parcel
     history: [{ status: "CREATED", timestamp: new Date().toISOString() }],
   };
   putParcel(parcel);
+  addMyTrackingCode(trackingCode); // mock không có tài khoản thật -> nhớ đơn theo trình duyệt
   if (MOCK_AUTO_PROGRESS) scheduleAutoProgress(trackingCode);
   return structuredClone(parcel);
 }
@@ -133,10 +162,11 @@ export async function mockTrackParcel(trackingCode: string): Promise<Parcel | nu
   return p ? structuredClone(p) : null;
 }
 
-// ---- Lấy danh sách nhiều đơn theo mã (mock GET /api/parcels/mine) ----
-// Backend thật sẽ lấy theo userId từ JWT thay vì nhận list code từ client.
-export async function mockListParcels(trackingCodes: string[]): Promise<Parcel[]> {
+// ---- Danh sách đơn của tôi (mock GET /api/parcels/mine) ----
+// Backend thật lọc theo userId trong JWT; mock chỉ nhớ mã đơn theo trình duyệt.
+export async function mockListParcels(): Promise<Parcel[]> {
   await delay(450);
+  const trackingCodes = getMyTrackingCodes();
   const found = trackingCodes
     .map((code) => getParcel(code))
     .filter((p): p is Parcel => Boolean(p))
@@ -212,6 +242,54 @@ export async function mockDriverLogin(email: string, password: string): Promise<
     throw new Error("Email hoặc mật khẩu không đúng");
   }
   return { accessToken: MOCK_DRIVER.token, user: { ...MOCK_DRIVER.user } };
+}
+
+// ---- Khách hàng (mock POST /auth/register, /auth/login) ----
+const CUSTOMERS_KEY = "lemail.mock.customers.v1";
+interface MockCustomer {
+  id: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  password: string;
+}
+
+function loadCustomers(): MockCustomer[] {
+  try {
+    return JSON.parse(localStorage.getItem(CUSTOMERS_KEY) ?? "[]") as MockCustomer[];
+  } catch {
+    return [];
+  }
+}
+
+function toCustomerSession(c: MockCustomer): AuthSession {
+  return {
+    accessToken: `mock-customer-${c.id}`,
+    user: { id: c.id, fullName: c.fullName, email: c.email, role: "customer" },
+  };
+}
+
+export async function mockCustomerRegister(req: RegisterRequest): Promise<AuthSession> {
+  await delay(400);
+  const list = loadCustomers();
+  const email = req.email.trim().toLowerCase();
+  if (list.some((c) => c.email === email || c.phone === req.phone)) {
+    throw new Error("email hoặc phone đã được sử dụng");
+  }
+  const c: MockCustomer = { id: `c${Date.now()}`, fullName: req.fullName, email, phone: req.phone, password: req.password };
+  try {
+    localStorage.setItem(CUSTOMERS_KEY, JSON.stringify([...list, c]));
+  } catch {
+    // localStorage bị chặn: tài khoản mock không được lưu
+  }
+  return toCustomerSession(c);
+}
+
+export async function mockCustomerLogin(email: string, password: string): Promise<AuthSession> {
+  await delay(400);
+  const c = loadCustomers().find((x) => x.email === email.trim().toLowerCase() && x.password === password);
+  if (!c) throw new Error("Email hoặc mật khẩu không đúng");
+  return toCustomerSession(c);
 }
 
 function assertMockToken(token: string) {
