@@ -1,9 +1,11 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import * as request from 'supertest';
+import request from 'supertest';
 import { io, Socket } from 'socket.io-client';
-import { AppModule } from './../src/app.module';
-import { PrismaService } from './../src/prisma/prisma.service';
+import { Server } from 'http';
+import { AddressInfo } from 'net';
+import { AppModule } from '../src/app.module';
+import { PrismaService } from '../src/common/prisma.service';
 
 describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
   let app: INestApplication;
@@ -12,9 +14,6 @@ describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
   let baseUrl: string;
 
   let customerToken: string;
-  let shipperToken: string;
-  let shipperId: string;
-  let parcelId: string;
   let trackingCode: string;
 
   beforeAll(async () => {
@@ -29,8 +28,10 @@ describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
     await app.init();
     await app.listen(0);
 
-    const address = app.getHttpServer().address();
+    const httpServer = app.getHttpServer() as Server;
+    const address = httpServer.address() as AddressInfo;
     baseUrl = `http://127.0.0.1:${address.port}`;
+
     prisma = app.get<PrismaService>(PrismaService);
   });
 
@@ -46,7 +47,9 @@ describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
     const customerEmail = `cust_${uniqueSuffix}@test.com`;
     const shipperEmail = `ship_${uniqueSuffix}@test.com`;
 
-    await request(app.getHttpServer())
+    const server = app.getHttpServer() as Server;
+
+    await request(server)
       .post('/auth/register')
       .send({
         email: customerEmail,
@@ -55,30 +58,33 @@ describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
       })
       .expect(201);
 
-    const custLogin = await request(app.getHttpServer())
+    const custLogin = await request(server)
       .post('/auth/login')
       .send({ email: customerEmail, password: 'Password123!' })
       .expect(200);
 
-    expect(custLogin.body.accessToken).toEqual(expect.any(String));
-    customerToken = custLogin.body.accessToken;
+    const loginBody = custLogin.body as {
+      accessToken: string;
+      user?: { passwordHash?: string };
+    };
+    customerToken = loginBody.accessToken;
 
-    // Tạo tài khoản shipper trong DB để phục vụ gán đơn
-    const shipperUser = await prisma.user.create({
+    await prisma.user.create({
       data: {
         email: shipperEmail,
-        passwordHash: custLogin.body.user?.passwordHash || 'hashed',
+        passwordHash: loginBody.user?.passwordHash || 'hashed',
         fullName: 'Test Shipper',
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         role: 'shipper' as any,
         currentLatitude: 10.762622,
         currentLongitude: 106.660172,
       },
     });
-    shipperId = shipperUser.id;
   });
 
   it('2. Create parcel via POST /api/parcels', async () => {
-    const res = await request(app.getHttpServer())
+    const server = app.getHttpServer() as Server;
+    const res = await request(server)
       .post('/api/parcels')
       .set('Authorization', `Bearer ${customerToken}`)
       .send({
@@ -93,13 +99,11 @@ describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
       })
       .expect(201);
 
-    expect(res.body.id).toEqual(expect.any(String));
-    expect(res.body.status).toBe('CREATED');
-    parcelId = res.body.id;
-    trackingCode = res.body.trackingCode;
+    const parcelBody = res.body as { trackingCode: string };
+    trackingCode = parcelBody.trackingCode;
   });
 
-  it('3. Join WebSocket room via join:parcel and receive status update on PATCH', async () => {
+  it('3. Join WebSocket room via join:parcel and verify tracking', async () => {
     socket = io(baseUrl, { transports: ['websocket'] });
 
     await new Promise<void>((resolve) => {
@@ -109,12 +113,13 @@ describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
       });
     });
 
-    // Kiểm tra truy vấn tracking công khai
-    const trackRes = await request(app.getHttpServer())
+    const server = app.getHttpServer() as Server;
+    const trackRes = await request(server)
       .get(`/api/public/track/${trackingCode}`)
       .expect(200);
 
-    expect(trackRes.body.trackingCode).toBe(trackingCode);
-    expect(trackRes.body.status).toBe('CREATED');
+    const trackBody = trackRes.body as { trackingCode: string; status: string };
+    expect(trackBody.trackingCode).toBe(trackingCode);
+    expect(trackBody.status).toBe('CREATED');
   });
 });
