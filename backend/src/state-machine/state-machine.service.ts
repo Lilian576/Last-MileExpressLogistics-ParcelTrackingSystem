@@ -1,4 +1,8 @@
-import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+} from '@nestjs/common';
 import { ParcelStatus } from '@prisma/client';
 import { TERMINAL_STATES, TRANSITION_TABLE } from './transition-table';
 import {
@@ -30,7 +34,10 @@ export class StateMachineService {
   /**
    * Tìm transition khớp với (from, event) trong bảng.
    */
-  private findTransition(from: ParcelStatus | null, event: TransitionEvent): TransitionDefinition | undefined {
+  private findTransition(
+    from: ParcelStatus | null,
+    event: TransitionEvent,
+  ): TransitionDefinition | undefined {
     return TRANSITION_TABLE.find((t) => t.from === from && t.event === event);
   }
 
@@ -74,7 +81,11 @@ export class StateMachineService {
       };
     }
 
-    return { valid: true, toStatus: transition.to, matchedTransition: transition };
+    return {
+      valid: true,
+      toStatus: transition.to,
+      matchedTransition: transition,
+    };
   }
 
   /**
@@ -94,7 +105,9 @@ export class StateMachineService {
 
     if (!result.valid) {
       const transitionExists = !!this.findTransition(from, event);
-      const isActorIssue = transitionExists && !this.findTransition(from, event)!.allowedActors.includes(actor);
+      const isActorIssue =
+        transitionExists &&
+        !this.findTransition(from, event)!.allowedActors.includes(actor);
 
       if (isActorIssue) {
         throw new ForbiddenException(result.reason);
@@ -110,7 +123,10 @@ export class StateMachineService {
    * ParcelsService (M2) dùng thông tin này để biết cần làm thêm gì
    * (vd: tạo delivery_assignments, tăng failed_attempt_count...) sau khi cập nhật status.
    */
-  getSideEffectDescription(from: ParcelStatus | null, event: TransitionEvent): string | undefined {
+  getSideEffectDescription(
+    from: ParcelStatus | null,
+    event: TransitionEvent,
+  ): string | undefined {
     return this.findTransition(from, event)?.sideEffect;
   }
 }

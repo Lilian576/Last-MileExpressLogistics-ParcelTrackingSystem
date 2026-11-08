@@ -48,8 +48,9 @@
     "@types/express": "^5.0.0",
     "@types/jest": "^30.0.0",
     "@types/node": "^24.0.0",
-    "@types/supertest": "^7.2.1",
     "@types/passport-jwt": "^4.0.1",
+    "@types/supertest": "^7.2.1",
+    "dotenv-cli": "^11.1.0",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
@@ -82,5 +83,17 @@
     ],
     "coverageDirectory": "../coverage",
     "testEnvironment": "node"
+  },
+  "coverageThreshold": {
+    "./src/state-machine/**/*.ts": {
+      "branches": 70,
+      "functions": 80,
+      "lines": 80
+    },
+    "./src/parcels/**/*.ts": {
+      "branches": 60,
+      "functions": 70,
+      "lines": 70
+    }
   }
 }

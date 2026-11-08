@@ -1,4 +1,4 @@
-import { StateMachineModule } from './state-machine/state-machine.module'; 
+import { StateMachineModule } from './state-machine/state-machine.module';
 import { ConfigModule } from '@nestjs/config';
 import { AuthModule } from './auth/auth.module';
 import { Module } from '@nestjs/common';
@@ -13,7 +13,7 @@ import { TrackingModule } from './tracking/tracking.module';
     ParcelsModule,
     TrackingModule,
     AuthModule,
-StateMachineModule
+    StateMachineModule,
   ],
   controllers: [AppController],
   providers: [AppService],
