@@ -52,15 +52,13 @@ describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
 
     const server = app.getHttpServer() as Server;
 
-    const registerRes = await request(server)
-      .post('/auth/register')
-      .send({
-        email: customerEmail,
-        password: 'Password123!',
-        fullName: 'Test Customer',
-        phone: customerPhone, // Thêm trường này
-        role: 'customer'     // Thêm trường này đề phòng API yêu cầu
-      });
+    const registerRes = await request(server).post('/auth/register').send({
+      email: customerEmail,
+      password: 'Password123!',
+      fullName: 'Test Customer',
+      phone: customerPhone, // Thêm trường này
+      role: 'customer', // Thêm trường này đề phòng API yêu cầu
+    });
 
     // In ra lỗi chi tiết nếu đăng ký thất bại
     if (registerRes.status !== 201) {
@@ -128,8 +126,7 @@ describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
     });
 
     const server = app.getHttpServer() as Server;
-    const trackRes = await request(server)
-      .get(`/api/parcels/${parcelId}`);
+    const trackRes = await request(server).get(`/api/parcels/${parcelId}`);
 
     if (trackRes.status !== 200) {
       console.log('--- API ERROR LOG ---');
