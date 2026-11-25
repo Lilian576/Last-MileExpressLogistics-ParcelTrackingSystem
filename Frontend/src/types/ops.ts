@@ -24,9 +24,29 @@ export interface OpsParcel {
   weightKg: number | string;
   currentStatus: ParcelStatus;
   createdAt: string;
+  senderLat: number | string | null;
+  senderLng: number | string | null;
+  currentLocationId: string | null;
+  destinationLocationId: string | null;
 }
 
 // Kết quả PATCH /api/parcels/:id/assign-courier (ParcelsService.assignCourier)
+export interface OpsHub {
+  id: string;
+  name: string;
+  address: string;
+}
+
+export interface AssignCourierInput {
+  destinationHubId: string;
+  pickupLat?: number;
+  pickupLng?: number;
+}
+
+export type OpsStatusUpdate =
+  | { event: "arrive_at_hub"; hubId: string }
+  | { event: "dispatch_to_next_hub" | "dispatch_last_mile" };
+
 export interface AssignCourierResult {
   parcel: { id: string; currentStatus: ParcelStatus };
   assignmentResult: {
@@ -39,25 +59,17 @@ export interface AssignCourierResult {
 
 // Thao tác vận hành theo trạng thái đơn. Mỗi dòng bám theo TRANSITION_TABLE
 // (backend/src/state-machine/transition-table.ts): event, actor được phép và guard.
-export interface OpsAction {
+export type OpsAction = {
   id: string;
-  kind: "assign" | "status";
   label: string;
-  // Role (JWT) được phép — actor trong bảng chuyển trạng thái
   roles: OpsRole[];
-  event?: string;
-  // Context guard gửi kèm PATCH /status (đúng giá trị guard yêu cầu)
-  context?: Record<string, boolean>;
-  // Guard cần nhân viên xác nhận trước khi gửi
-  confirm?: string;
-  // Nếu có lý do => nút bị khóa và hiển thị lý do (dùng khi một thao tác chưa thực hiện được)
-  blocked?: string;
-}
+} & (
+  | { kind: "assign" }
+  | { kind: "status"; event: OpsStatusUpdate["event"]; confirm?: string }
+);
 
 export const OPS_ACTIONS: Partial<Record<ParcelStatus, OpsAction[]>> = {
-  // Dòng 2: CREATED -> PENDING_PICKUP, actor dispatcher/system/admin; DTO bắt buộc pickupLat/pickupLng
   CREATED: [{ id: "assign", kind: "assign", label: "Gán tài xế gần nhất", roles: ["admin"] }],
-  // Dòng 7: IN_TRANSIT -> AT_HUB, actor warehouse_staff, guard isHubLocation = true
   IN_TRANSIT: [
     {
       id: "arrive_at_hub",
@@ -65,30 +77,23 @@ export const OPS_ACTIONS: Partial<Record<ParcelStatus, OpsAction[]>> = {
       label: "Tiếp nhận tại hub",
       roles: ["warehouse_staff"],
       event: "arrive_at_hub",
-      context: { isHubLocation: true },
       confirm: "Đã quét mã vận đơn tại hub",
     },
   ],
   AT_HUB: [
-    // Dòng 9: AT_HUB -> IN_TRANSIT, actor warehouse_staff, guard isFinalHub = false
     {
       id: "dispatch_to_next_hub",
       kind: "status",
       label: "Chuyển sang hub tiếp theo",
       roles: ["warehouse_staff"],
       event: "dispatch_to_next_hub",
-      context: { isFinalHub: false },
     },
-    // Dòng 10: AT_HUB -> OUT_FOR_DELIVERY. Kế hoạch D01 chốt `admin` kiêm điều phối trong MVP.
-    // LƯU Ý: transition-table.ts trên main/develop vẫn chỉ cho actor 'dispatcher' => backend trả 403
-    // cho tới khi M3 thêm 'admin' vào allowedActors của DISPATCH_LAST_MILE (UI hiển thị nguyên văn lỗi).
     {
       id: "dispatch_last_mile",
       kind: "status",
       label: "Điều phối giao chặng cuối",
       roles: ["admin"],
       event: "dispatch_last_mile",
-      context: { isFinalHub: true },
     },
   ],
 };

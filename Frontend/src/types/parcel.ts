@@ -115,6 +115,7 @@ export interface Parcel {
   feeVnd: number;
   currentStatus: ParcelStatus;
   history: ParcelEvent[];
+  location?: ParcelLocationUpdate | null;
 }
 
 // Payload event WebSocket `parcel.status.updated` / `parcel.delivery.completed`

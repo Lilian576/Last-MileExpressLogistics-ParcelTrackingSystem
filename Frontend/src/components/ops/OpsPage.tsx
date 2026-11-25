@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate, useNavigate } from "react-router-dom";
-import { assignCourier, listAllParcels, opsUpdateStatus, OPS_UNAVAILABLE_IN_MOCK } from "../../api/opsApi";
+import { assignCourier, listAllParcels, listHubs, opsUpdateStatus, OPS_UNAVAILABLE_IN_MOCK } from "../../api/opsApi";
 import { USE_MOCK } from "../../api/parcelApi";
 import { AuthExpiredError } from "../../api/errors";
 import { clearOpsSession, getOpsSession } from "../../lib/opsSession";
-import { OPS_ROLE_LABEL, OpsAction, OpsParcel, OpsRole } from "../../types/ops";
+import { AssignCourierInput, OPS_ROLE_LABEL, OpsHub, OpsParcel, OpsRole, OpsStatusUpdate } from "../../types/ops";
 import { ParcelStatus, STATUS_LABEL } from "../../types/parcel";
 import { OpsParcelCard } from "./OpsParcelCard";
 
@@ -17,6 +17,8 @@ export function OpsPage() {
   const role = session?.user.role as OpsRole | undefined;
 
   const [parcels, setParcels] = useState<OpsParcel[] | null>(null);
+  const [hubs, setHubs] = useState<OpsHub[]>([]);
+  const [hubError, setHubError] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ParcelStatus | "ALL">("ALL");
@@ -40,6 +42,21 @@ export function OpsPage() {
       setLoadError(err instanceof Error ? err.message : "Có lỗi xảy ra");
     }
   }, [token, logout]);
+
+  const loadHubs = useCallback(async () => {
+    if (!token || USE_MOCK) return;
+    try {
+      setHubs(await listHubs(token));
+      setHubError(null);
+    } catch (err) {
+      if (err instanceof AuthExpiredError) return logout();
+      setHubError(err instanceof Error ? err.message : "Không tải được danh sách hub.");
+    }
+  }, [token, logout]);
+
+  useEffect(() => {
+    void loadHubs();
+  }, [loadHubs]);
 
   useEffect(() => {
     void load(); // tải lại từ server mỗi lần mở trang -> reload vẫn thấy dữ liệu đã lưu
@@ -77,15 +94,15 @@ export function OpsPage() {
     }
   }
 
-  const onStatusAction = (parcel: OpsParcel, action: OpsAction) =>
+  const onStatusAction = (parcel: OpsParcel, input: OpsStatusUpdate) =>
     run(parcel, async () => {
-      const next = await opsUpdateStatus(token, parcel.id, action.event!, action.context);
+      const next = await opsUpdateStatus(token, parcel.id, input);
       return `Đã chuyển sang “${STATUS_LABEL[next]}”.`;
     });
 
-  const onAssign = (parcel: OpsParcel, pickupLat: number, pickupLng: number) =>
+  const onAssign = (parcel: OpsParcel, input: AssignCourierInput) =>
     run(parcel, async () => {
-      const r = await assignCourier(token, parcel.id, pickupLat, pickupLng);
+      const r = await assignCourier(token, parcel.id, input);
       const c = r.assignmentResult.courier;
       return c
         ? `Đã gán tài xế ${c.fullName}${r.assignmentResult.distanceKm != null ? ` (cách điểm lấy hàng ~${r.assignmentResult.distanceKm.toFixed(1)} km)` : ""}.`
@@ -135,6 +152,11 @@ export function OpsPage() {
       </div>
 
       {parcels === null && !loadError && !USE_MOCK && <div className="muted">Đang tải danh sách đơn...</div>}
+      {hubError && (
+        <div className="error" role="alert">
+          {hubError} <button className="btn" type="button" onClick={() => void loadHubs()}>Thử lại</button>
+        </div>
+      )}
       {loadError && (
         <div className="error" role="alert">
           {loadError}{" "}
@@ -153,6 +175,7 @@ export function OpsPage() {
               key={p.id}
               parcel={p}
               role={role}
+              hubs={hubs}
               busy={busyId === p.id}
               error={rowError[p.id]}
               info={rowInfo[p.id]}
