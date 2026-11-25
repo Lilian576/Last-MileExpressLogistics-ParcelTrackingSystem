@@ -1,0 +1,26 @@
+config:
+  target: "http://localhost:3000"
+  phases:
+    - duration: 20
+      arrivalRate: 10
+      name: "Warm up and spike WebSocket rooms"
+  engines:
+    socketio-v3: {}
+
+scenarios:
+  - name: "Clients join tracking room and listen for status updates"
+    engine: socketio-v3
+    flow:
+      - emit:
+          channel: "join:parcel"
+          data:
+            trackingCode: "PCL-LOADTEST-01"
+      - think: 5
+
+  - name: "Trigger status update via HTTP PATCH"
+    weight: 1
+    flow:
+      - patch:
+          url: "/api/parcels/1/status"
+          json:
+            status: "IN_TRANSIT"

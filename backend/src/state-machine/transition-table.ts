@@ -15,7 +15,7 @@ export const TRANSITION_TABLE: TransitionDefinition[] = [
     event: TransitionEvent.CREATE_PARCEL,
     allowedActors: ['customer'],
     guardDescription: 'Thông tin đơn hợp lệ',
-    sideEffect: "Sinh tracking_code; ghi parcel_status_history",
+    sideEffect: 'Sinh tracking_code; ghi parcel_status_history',
     guard: () => true, // validate dữ liệu đơn nằm ở DTO của ParcelsModule (M2), không thuộc state machine
   },
   {
@@ -25,7 +25,7 @@ export const TRANSITION_TABLE: TransitionDefinition[] = [
     event: TransitionEvent.ASSIGN_COURIER,
     allowedActors: ['dispatcher', 'system', 'admin'],
     guardDescription: 'Có shipper khả dụng',
-    sideEffect: "Tạo delivery_assignments (status=assigned)",
+    sideEffect: 'Tạo delivery_assignments (status=assigned)',
     guard: (ctx) => ctx.hasAvailableCourier === true,
   },
   {
@@ -105,7 +105,7 @@ export const TRANSITION_TABLE: TransitionDefinition[] = [
     event: TransitionEvent.DISPATCH_LAST_MILE,
     allowedActors: ['dispatcher'],
     guardDescription: 'Đến hub phụ trách khu vực giao',
-    sideEffect: "Tạo delivery_assignments (loại last-mile)",
+    sideEffect: 'Tạo delivery_assignments (loại last-mile)',
     guard: (ctx) => ctx.isFinalHub === true,
   },
   {
@@ -146,7 +146,9 @@ export const TRANSITION_TABLE: TransitionDefinition[] = [
     allowedActors: ['system'],
     guardDescription: 'failed_attempt_count < max (mặc định 3)',
     sideEffect: 'Lên lịch giao lại',
-    guard: (ctx) => (ctx.failedAttemptCount ?? 0) < (ctx.maxRetryAttempts ?? DEFAULT_MAX_RETRY),
+    guard: (ctx) =>
+      (ctx.failedAttemptCount ?? 0) <
+      (ctx.maxRetryAttempts ?? DEFAULT_MAX_RETRY),
   },
   {
     id: 15,
@@ -156,7 +158,9 @@ export const TRANSITION_TABLE: TransitionDefinition[] = [
     allowedActors: ['system'],
     guardDescription: 'failed_attempt_count >= max',
     sideEffect: 'Thông báo customer về việc hoàn trả',
-    guard: (ctx) => (ctx.failedAttemptCount ?? 0) >= (ctx.maxRetryAttempts ?? DEFAULT_MAX_RETRY),
+    guard: (ctx) =>
+      (ctx.failedAttemptCount ?? 0) >=
+      (ctx.maxRetryAttempts ?? DEFAULT_MAX_RETRY),
   },
   {
     id: 16,

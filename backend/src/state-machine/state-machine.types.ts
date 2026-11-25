@@ -19,7 +19,13 @@ export enum TransitionEvent {
 }
 
 // Actor — đúng theo cột "Actor" trong transition table
-export type TransitionActor = 'customer' | 'shipper' | 'dispatcher' | 'warehouse_staff' | 'system' | 'admin';
+export type TransitionActor =
+  | 'customer'
+  | 'shipper'
+  | 'dispatcher'
+  | 'warehouse_staff'
+  | 'system'
+  | 'admin';
 
 /**
  * Ngữ cảnh (context) mà bên gọi (M2 - ParcelsService) phải cung cấp

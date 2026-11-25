@@ -87,3 +87,10 @@ npm run lint      # oxlint
 
 React 19 + TypeScript + Vite, React Router v7, Socket.io-client (cho realtime
 tracking thật ở Tuần 4).
+
+## Hướng dẫn chạy bằng Docker Compose
+1. Khởi động PostgreSQL và Backend (tự động chạy migration):
+   ```bash
+   docker compose up --build -d
+   Kiểm tra trạng thái container:
+docker compose ps
