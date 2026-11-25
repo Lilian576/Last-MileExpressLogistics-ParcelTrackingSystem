@@ -1,0 +1,544 @@
+From 675f09e8aebe1825c0adb92cf9c2d0e927c4367f Mon Sep 17 00:00:00 2001
+From: dev <dev@example.com>
+Date: Tue, 3 Nov 2026 01:56:03 +0000
+Subject: [PATCH 2/2] =?UTF-8?q?feat(tracking):=20route=20c=C3=B4ng=20khai?=
+ =?UTF-8?q?=20GET=20/api/public/track/:code=20+=20test=20e2e=20realtime?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ Frontend/README.md                            |   4 +-
+ Frontend/src/api/parcelApi.ts                 |  27 ++-
+ .../src/components/tracking/TrackingPage.tsx  |   8 +-
+ backend/src/parcels/parcels.module.ts         |   3 +-
+ backend/src/parcels/parcels.realtime.spec.ts  | 188 ++++++++++++++++++
+ backend/src/parcels/parcels.service.spec.ts   |  75 +++++++
+ backend/src/parcels/parcels.service.ts        |  41 ++++
+ .../public-tracking.controller.spec.ts        |  53 +++++
+ .../src/parcels/public-tracking.controller.ts |  14 ++
+ 9 files changed, 406 insertions(+), 7 deletions(-)
+ create mode 100644 backend/src/parcels/parcels.realtime.spec.ts
+ create mode 100644 backend/src/parcels/public-tracking.controller.spec.ts
+ create mode 100644 backend/src/parcels/public-tracking.controller.ts
+
+diff --git a/Frontend/README.md b/Frontend/README.md
+index 70b566c..aedef99 100644
+--- a/Frontend/README.md
++++ b/Frontend/README.md
+@@ -161,9 +161,9 @@ Các endpoint UI đang mong đợi từ backend (đối chiếu với M2/M3):
+ |---|---|---|---|
+ | Tính phí ship     | `POST /api/parcels/quote`         | `POST /api/parcels/calculate-fee` (DTO khác: lat/lng thay vì province) | Cần thống nhất lại request/response |
+ | Tạo đơn           | `POST /api/parcels`               | `POST /api/parcels` (đúng path, khác DTO + cần JWT) | Backend yêu cầu login trước |
+-| Tra cứu công khai | `GET /api/public/track/:code`     | Chưa có — chỉ có `GET /api/parcels/:id` (id số) | Cần M2 thêm route theo trackingCode |
++| Tra cứu công khai | `GET /api/public/track/:code`     | Đã có (`PublicTrackingController`) | Chỉ trả trackingCode, trạng thái, tên người nhận, lịch sử — không lộ SĐT/địa chỉ; mã không tồn tại → 404 |
+ | Danh sách đơn     | `GET /api/parcels/mine` (+ JWT)   | Chưa có | Cần AuthModule (M3) + route mới từ M2 |
+-| Realtime tracking | WebSocket `join:parcel` / event `parcel.status.updated`, `parcel.delivery.completed` | Gateway đã có (xem mục Hợp đồng WebSocket), test WebSocket thật ở backend | Phía client chạy đầy đủ ở chế độ mock; với backend thật còn phụ thuộc route `GET /api/public/track/:code` (chưa có) để lấy snapshot ban đầu |
++| Realtime tracking | WebSocket `join:parcel` / event `parcel.status.updated`, `parcel.delivery.completed` | Đã có (xem mục Hợp đồng WebSocket) | Test tích hợp `backend/src/parcels/parcels.realtime.spec.ts` chạy cả chuỗi: snapshot REST → join room → tài xế PATCH status → nhận event |
+ | Driver: đăng nhập | `POST /auth/login` | Đúng (không có prefix `/api`) | |
+ | Driver: đơn được giao | `GET /api/parcels/assigned/mine` (+ JWT, role shipper) | Đã thêm | Đơn xuất hiện khi điều phối gọi `PATCH /api/parcels/:id/assign-courier` (tạo `delivery_assignments` status=assigned) |
+ | Driver: cập nhật trạng thái | `PATCH /api/parcels/:id/status` | Đúng | Backend nay ghi thêm `parcel_status_history` |
+diff --git a/Frontend/src/api/parcelApi.ts b/Frontend/src/api/parcelApi.ts
+index 8b0345e..eeee1ed 100644
+--- a/Frontend/src/api/parcelApi.ts
++++ b/Frontend/src/api/parcelApi.ts
+@@ -2,6 +2,7 @@ import { io, Socket } from "socket.io-client";
+ import {
+   CreateParcelRequest,
+   Parcel,
++  ParcelEvent,
+   ParcelStatus,
+   ParcelStatusUpdate,
+   QuoteRequest,
+@@ -51,10 +52,32 @@ export async function createParcel(req: CreateParcelRequest): Promise<Parcel> {
+ 
+ export async function trackParcel(trackingCode: string): Promise<Parcel | null> {
+   if (USE_MOCK) return mockTrackParcel(trackingCode);
+-  const res = await fetch(`${API_BASE_URL}/api/public/track/${trackingCode}`);
++  const res = await fetch(`${API_BASE_URL}/api/public/track/${encodeURIComponent(trackingCode)}`);
+   if (res.status === 404) return null;
+   if (!res.ok) throw new Error("Không tra cứu được đơn hàng.");
+-  return res.json();
++  return toParcel((await res.json()) as PublicTrackResponse);
++}
++
++// Backend chỉ trả thông tin tối thiểu cho tra cứu công khai (không có SĐT, địa chỉ,
++// thông tin người gửi) -> các trường còn lại của Parcel để rỗng, UI không dùng tới.
++interface PublicTrackResponse {
++  trackingCode: string;
++  currentStatus: ParcelStatus;
++  receiverName: string;
++  history: ParcelEvent[];
++}
++
++function toParcel(r: PublicTrackResponse): Parcel {
++  const empty = { fullName: "", phone: "", addressLine: "", province: "" };
++  return {
++    trackingCode: r.trackingCode,
++    sender: { ...empty },
++    receiver: { ...empty, fullName: r.receiverName },
++    packageInfo: { weightKg: 0, lengthCm: 0, widthCm: 0, heightCm: 0, category: "OTHER" },
++    feeVnd: 0,
++    currentStatus: r.currentStatus,
++    history: r.history,
++  };
+ }
+ 
+ // ---- Danh sách đơn của tôi ----
+diff --git a/Frontend/src/components/tracking/TrackingPage.tsx b/Frontend/src/components/tracking/TrackingPage.tsx
+index 4803cec..c88e00e 100644
+--- a/Frontend/src/components/tracking/TrackingPage.tsx
++++ b/Frontend/src/components/tracking/TrackingPage.tsx
+@@ -113,8 +113,12 @@ export function TrackingPage() {
+           </div>
+ 
+           <p className="muted" style={{ marginTop: 12 }}>
+-            Từ <b>{parcel.sender.province}</b> đến <b>{parcel.receiver.province}</b> · Người nhận:{" "}
+-            {parcel.receiver.fullName}
++            {parcel.sender.province && parcel.receiver.province && (
++              <>
++                Từ <b>{parcel.sender.province}</b> đến <b>{parcel.receiver.province}</b> ·{" "}
++              </>
++            )}
++            Người nhận: {parcel.receiver.fullName}
+           </p>
+ 
+           <Timeline history={parcel.history} currentStatus={parcel.currentStatus} />
+diff --git a/backend/src/parcels/parcels.module.ts b/backend/src/parcels/parcels.module.ts
+index 109fae5..1a9f87b 100644
+--- a/backend/src/parcels/parcels.module.ts
++++ b/backend/src/parcels/parcels.module.ts
+@@ -1,5 +1,6 @@
+ import { Module } from '@nestjs/common';
+ import { ParcelsController } from './parcels.controller';
++import { PublicTrackingController } from './public-tracking.controller';
+ import { ParcelsService } from './parcels.service';
+ import { PrismaService } from '../common/prisma.service';
+ import { StateMachineModule } from '../state-machine/state-machine.module';
+@@ -8,7 +9,7 @@ import { TrackingModule } from '../tracking/tracking.module';
+ 
+ @Module({
+   imports: [StateMachineModule, TrackingModule],
+-  controllers: [ParcelsController],
++  controllers: [ParcelsController, PublicTrackingController],
+   providers: [ParcelsService, PrismaService, DriverAssignmentService],
+ })
+ export class ParcelsModule {}
+\ No newline at end of file
+diff --git a/backend/src/parcels/parcels.realtime.spec.ts b/backend/src/parcels/parcels.realtime.spec.ts
+new file mode 100644
+index 0000000..5c83048
+--- /dev/null
++++ b/backend/src/parcels/parcels.realtime.spec.ts
+@@ -0,0 +1,188 @@
++import {
++  CanActivate,
++  ExecutionContext,
++  INestApplication,
++  ValidationPipe,
++} from '@nestjs/common';
++import { Test } from '@nestjs/testing';
++import { Server } from 'http';
++import { AddressInfo } from 'net';
++import { io, Socket } from 'socket.io-client';
++import request from 'supertest';
++import { PrismaService } from '../common/prisma.service';
++import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
++import { ParcelsModule } from './parcels.module';
++import { TRACKING_EVENTS } from '../tracking/tracking.gateway';
++
++interface FakeParcel {
++  id: string;
++  trackingCode: string;
++  receiverName: string;
++  receiverPhone: string;
++  receiverAddress: string;
++  currentStatus: string;
++  createdAt: Date;
++}
++interface FakeHistory {
++  parcelId: string;
++  status: string;
++  changedBy: string | null;
++  note: string | null;
++  createdAt: Date;
++}
++
++// Prisma giả trong bộ nhớ, đủ cho luồng: tra cứu công khai + đổi trạng thái
++function createFakePrisma(parcel: FakeParcel) {
++  const history: FakeHistory[] = [];
++  return {
++    history,
++    parcel: {
++      findUnique: ({
++        where,
++      }: {
++        where: { id?: string; trackingCode?: string };
++      }) => {
++        const hit =
++          where.id === parcel.id || where.trackingCode === parcel.trackingCode;
++        return Promise.resolve(
++          hit ? { ...parcel, statusHistory: [...history] } : null,
++        );
++      },
++      update: ({ data }: { data: { currentStatus: string } }) => {
++        parcel.currentStatus = data.currentStatus;
++        return Promise.resolve({ ...parcel });
++      },
++    },
++    parcelStatusHistory: {
++      create: ({
++        data,
++      }: {
++        data: { parcelId: string; status: string; changedBy: string | null };
++      }) => {
++        const row: FakeHistory = {
++          ...data,
++          note: null,
++          createdAt: new Date(),
++        };
++        history.push(row);
++        return Promise.resolve(row);
++      },
++    },
++    $transaction: (ops: Promise<unknown>[]) => Promise.all(ops),
++  };
++}
++
++// Giả lập JwtAuthGuard: coi như đã đăng nhập với role shipper
++class FakeShipperGuard implements CanActivate {
++  canActivate(context: ExecutionContext): boolean {
++    const req = context
++      .switchToHttp()
++      .getRequest<{ user: { userId: string; role: string } }>();
++    req.user = { userId: 'driver-1', role: 'shipper' };
++    return true;
++  }
++}
++
++// End-to-end toàn chuỗi (không cần DB): HTTP snapshot -> WebSocket room ->
++// tài xế PATCH status -> trang tracking nhận event realtime.
++describe('Realtime tracking end-to-end', () => {
++  let app: INestApplication;
++  let url: string;
++  let socket: Socket;
++  let fake: ReturnType<typeof createFakePrisma>;
++  const parcel: FakeParcel = {
++    id: 'p1',
++    trackingCode: 'PCL1',
++    receiverName: 'An',
++    receiverPhone: '0900000000',
++    receiverAddress: '1 Lê Lợi',
++    currentStatus: 'PENDING_PICKUP',
++    createdAt: new Date('2026-10-27T01:00:00.000Z'),
++  };
++
++  beforeAll(async () => {
++    fake = createFakePrisma(parcel);
++    const moduleRef = await Test.createTestingModule({
++      imports: [ParcelsModule],
++    })
++      .overrideProvider(PrismaService)
++      .useValue(fake)
++      .overrideGuard(JwtAuthGuard)
++      .useClass(FakeShipperGuard)
++      .compile();
++
++    app = moduleRef.createNestApplication();
++    app.useGlobalPipes(
++      new ValidationPipe({ whitelist: true, transform: true }),
++    );
++    await app.listen(0);
++    const server = app.getHttpServer() as Server;
++    url = `http://localhost:${(server.address() as AddressInfo).port}`;
++
++    socket = io(url, { transports: ['websocket'] });
++    await new Promise<void>((resolve) => socket.on('connect', () => resolve()));
++    await socket.emitWithAck('join:parcel', { trackingCode: 'PCL1' });
++  });
++
++  afterAll(async () => {
++    socket.disconnect();
++    await app.close();
++  });
++
++  it('GET /api/public/track/:code trả snapshot, không lộ SĐT/địa chỉ', async () => {
++    const res = await request(url).get('/api/public/track/PCL1').expect(200);
++    const body = res.body as {
++      currentStatus: string;
++      history: { status: string }[];
++    };
++    expect(body.currentStatus).toBe('PENDING_PICKUP');
++    expect(body.history[0].status).toBe('CREATED');
++    expect(JSON.stringify(body)).not.toContain('0900000000');
++    expect(JSON.stringify(body)).not.toContain('Lê Lợi');
++  });
++
++  it('mã không tồn tại -> 404', async () => {
++    await request(url).get('/api/public/track/NOPE').expect(404);
++  });
++
++  it('tài xế PATCH status -> trang tracking nhận event, khớp với snapshot REST', async () => {
++    const received = new Promise<{
++      currentStatus: string;
++      event: { status: string; timestamp: string };
++    }>((resolve) => socket.once(TRACKING_EVENTS.STATUS_UPDATED, resolve));
++
++    await request(url)
++      .patch('/api/parcels/p1/status')
++      .send({ event: 'confirm_pickup', isAssignedCourier: true })
++      .expect(200);
++
++    const update = await received;
++    expect(update.currentStatus).toBe('PICKED_UP');
++
++    // Resync qua REST phải ra cùng mốc thời gian với event -> client khử trùng được
++    const res = await request(url).get('/api/public/track/PCL1').expect(200);
++    const snap = res.body as {
++      currentStatus: string;
++      history: { status: string; timestamp: string }[];
++    };
++    expect(snap.currentStatus).toBe('PICKED_UP');
++    expect(snap.history[snap.history.length - 1]).toEqual(update.event);
++    expect(fake.history).toHaveLength(1);
++    expect(fake.history[0].changedBy).toBe('driver-1');
++  });
++
++  it('transition sai -> 400, DB không đổi và KHÔNG phát event', async () => {
++    const got = jest.fn();
++    socket.on(TRACKING_EVENTS.STATUS_UPDATED, got);
++
++    await request(url)
++      .patch('/api/parcels/p1/status')
++      .send({ event: 'confirm_delivery', hasDeliveryProof: true })
++      .expect(400);
++
++    await new Promise((r) => setTimeout(r, 150));
++    expect(got).not.toHaveBeenCalled();
++    expect(parcel.currentStatus).toBe('PICKED_UP');
++    socket.off(TRACKING_EVENTS.STATUS_UPDATED, got);
++  });
++});
+diff --git a/backend/src/parcels/parcels.service.spec.ts b/backend/src/parcels/parcels.service.spec.ts
+index 891b8f1..9406c5a 100644
+--- a/backend/src/parcels/parcels.service.spec.ts
++++ b/backend/src/parcels/parcels.service.spec.ts
+@@ -179,4 +179,79 @@ describe('ParcelsService - Pricing Engine', () => {
+       expect(args.where.courierId).toBe('driver-1');
+     });
+   });
++  describe('findPublicTracking', () => {
++    const createdAt = new Date('2026-10-27T01:00:00.000Z');
++    const base = {
++      id: 'p1',
++      trackingCode: 'PCL1',
++      currentStatus: 'PICKED_UP',
++      receiverName: 'An',
++      receiverPhone: '0900000000',
++      receiverAddress: '1 Lê Lợi',
++      senderId: 'u1',
++      createdAt,
++    };
++
++    it('trả lịch sử theo thứ tự, bổ sung mốc CREATED khi DB chưa có', async () => {
++      mockPrisma.parcel.findUnique.mockResolvedValue({
++        ...base,
++        statusHistory: [
++          {
++            status: 'PICKED_UP',
++            createdAt: new Date('2026-10-27T02:00:00.000Z'),
++            note: null,
++          },
++        ],
++      });
++
++      const result = await service.findPublicTracking('PCL1');
++
++      expect(result.history).toEqual([
++        { status: 'CREATED', timestamp: createdAt.toISOString() },
++        { status: 'PICKED_UP', timestamp: '2026-10-27T02:00:00.000Z' },
++      ]);
++      expect(result.currentStatus).toBe('PICKED_UP');
++    });
++
++    it('không thêm CREATED lần 2 nếu lịch sử đã bắt đầu bằng CREATED', async () => {
++      mockPrisma.parcel.findUnique.mockResolvedValue({
++        ...base,
++        currentStatus: 'CREATED',
++        statusHistory: [{ status: 'CREATED', createdAt, note: 'tạo đơn' }],
++      });
++
++      const result = await service.findPublicTracking('PCL1');
++
++      expect(result.history).toEqual([
++        {
++          status: 'CREATED',
++          timestamp: createdAt.toISOString(),
++          note: 'tạo đơn',
++        },
++      ]);
++    });
++
++    it('KHÔNG lộ SĐT, địa chỉ người nhận hay thông tin người gửi', async () => {
++      mockPrisma.parcel.findUnique.mockResolvedValue({
++        ...base,
++        statusHistory: [],
++      });
++
++      const result = await service.findPublicTracking('PCL1');
++
++      expect(Object.keys(result).sort()).toEqual([
++        'currentStatus',
++        'history',
++        'receiverName',
++        'trackingCode',
++      ]);
++    });
++
++    it('không tìm thấy mã -> NotFoundException', async () => {
++      mockPrisma.parcel.findUnique.mockResolvedValue(null);
++      await expect(service.findPublicTracking('NOPE')).rejects.toThrow(
++        'Không tìm thấy',
++      );
++    });
++  });
+ });
+diff --git a/backend/src/parcels/parcels.service.ts b/backend/src/parcels/parcels.service.ts
+index f64a4d7..8265772 100644
+--- a/backend/src/parcels/parcels.service.ts
++++ b/backend/src/parcels/parcels.service.ts
+@@ -1,4 +1,5 @@
+ import { Injectable, NotFoundException } from '@nestjs/common';
++import { ParcelStatus } from '@prisma/client';
+ import { PrismaService } from '../common/prisma.service';
+ import { CreateParcelDto } from './create-parcel.dto';
+ import { UpdateParcelStatusDto } from './update-parcel-status.dto';
+@@ -99,6 +100,46 @@ export class ParcelsService {
+     return this.prisma.parcel.findUnique({ where: { id } });
+   }
+ 
++  // Tra cứu công khai theo mã vận đơn (không cần đăng nhập). Chỉ trả thông tin tối thiểu:
++  // KHÔNG trả SĐT/địa chỉ người nhận hay thông tin người gửi.
++  async findPublicTracking(trackingCode: string) {
++    const parcel = await this.prisma.parcel.findUnique({
++      where: { trackingCode },
++      include: { statusHistory: { orderBy: { createdAt: 'asc' } } },
++    });
++
++    if (!parcel) {
++      throw new NotFoundException(
++        `Không tìm thấy đơn hàng với mã ${trackingCode}`,
++      );
++    }
++
++    const history: {
++      status: ParcelStatus;
++      timestamp: string;
++      note?: string;
++    }[] = parcel.statusHistory.map((h) => ({
++      status: h.status,
++      timestamp: h.createdAt.toISOString(),
++      ...(h.note ? { note: h.note } : {}),
++    }));
++
++    // create() chưa ghi mốc CREATED vào lịch sử -> bổ sung từ createdAt để timeline đủ
++    if (history[0]?.status !== ParcelStatus.CREATED) {
++      history.unshift({
++        status: ParcelStatus.CREATED,
++        timestamp: parcel.createdAt.toISOString(),
++      });
++    }
++
++    return {
++      trackingCode: parcel.trackingCode,
++      currentStatus: parcel.currentStatus,
++      receiverName: parcel.receiverName,
++      history,
++    };
++  }
++
+   // Đơn đang được giao cho shipper này (dùng cho Driver UI). Đơn đã kết thúc không trả về.
+   async findAssignedTo(courierId: string) {
+     const assignments = await this.prisma.deliveryAssignment.findMany({
+diff --git a/backend/src/parcels/public-tracking.controller.spec.ts b/backend/src/parcels/public-tracking.controller.spec.ts
+new file mode 100644
+index 0000000..6e22993
+--- /dev/null
++++ b/backend/src/parcels/public-tracking.controller.spec.ts
+@@ -0,0 +1,53 @@
++import { INestApplication, NotFoundException } from '@nestjs/common';
++import { Test } from '@nestjs/testing';
++import request from 'supertest';
++import { App } from 'supertest/types';
++import { PublicTrackingController } from './public-tracking.controller';
++import { ParcelsService } from './parcels.service';
++
++// Test HTTP thật (không cần DB): kiểm tra đúng đường dẫn, 200 và 404.
++describe('PublicTrackingController (GET /api/public/track/:code)', () => {
++  let app: INestApplication<App>;
++  const mockService = { findPublicTracking: jest.fn() };
++
++  beforeAll(async () => {
++    const moduleRef = await Test.createTestingModule({
++      controllers: [PublicTrackingController],
++      providers: [{ provide: ParcelsService, useValue: mockService }],
++    }).compile();
++    app = moduleRef.createNestApplication();
++    await app.init();
++  });
++
++  afterAll(async () => {
++    await app.close();
++  });
++
++  beforeEach(() => jest.clearAllMocks());
++
++  it('200 và trả đúng dữ liệu theo mã vận đơn, không cần đăng nhập', async () => {
++    const body = {
++      trackingCode: 'PCL1',
++      currentStatus: 'PICKED_UP',
++      receiverName: 'An',
++      history: [{ status: 'CREATED', timestamp: '2026-10-27T01:00:00.000Z' }],
++    };
++    mockService.findPublicTracking.mockResolvedValue(body);
++
++    const res = await request(app.getHttpServer())
++      .get('/api/public/track/PCL1')
++      .expect(200);
++
++    expect(res.body).toEqual(body);
++    expect(mockService.findPublicTracking).toHaveBeenCalledWith('PCL1');
++  });
++
++  it('404 khi không có đơn (Frontend dựa vào 404 để hiện "không tìm thấy")', async () => {
++    mockService.findPublicTracking.mockRejectedValue(
++      new NotFoundException('Không tìm thấy đơn hàng'),
++    );
++    await request(app.getHttpServer())
++      .get('/api/public/track/NOPE')
++      .expect(404);
++  });
++});
+diff --git a/backend/src/parcels/public-tracking.controller.ts b/backend/src/parcels/public-tracking.controller.ts
+new file mode 100644
+index 0000000..0cdd904
+--- /dev/null
++++ b/backend/src/parcels/public-tracking.controller.ts
+@@ -0,0 +1,14 @@
++import { Controller, Get, Param } from '@nestjs/common';
++import { ParcelsService } from './parcels.service';
++
++// Route công khai cho trang tra cứu của khách (không cần JWT).
++// Frontend gọi: GET /api/public/track/:code
++@Controller('api/public')
++export class PublicTrackingController {
++  constructor(private readonly parcelsService: ParcelsService) {}
++
++  @Get('track/:code')
++  track(@Param('code') code: string) {
++    return this.parcelsService.findPublicTracking(code.trim());
++  }
++}
+-- 
+2.43.0
+

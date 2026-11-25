@@ -6,7 +6,7 @@ describe("useDriverGps (backend thật)", () => {
     vi.resetModules();
     vi.stubEnv("VITE_USE_MOCK", "false");
     const emit = vi.fn();
-    const ioMock = vi.fn(() => ({ emit, disconnect: vi.fn() }));
+    const ioMock = vi.fn(() => ({ emit, on: vi.fn(), off: vi.fn(), disconnect: vi.fn(), connected: true }));
     vi.doMock("socket.io-client", () => ({ io: ioMock }));
     const { renderHook } = await import("@testing-library/react");
     const { useDriverGps } = await import("./driverGps");

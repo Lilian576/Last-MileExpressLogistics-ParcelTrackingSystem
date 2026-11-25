@@ -5,6 +5,8 @@ import { TrackingPage } from "./components/tracking/TrackingPage";
 import { OrdersPage } from "./components/orders/OrdersPage";
 import { DriverLoginPage } from "./components/driver/DriverLoginPage";
 import { DriverOrdersPage } from "./components/driver/DriverOrdersPage";
+import { OpsLoginPage } from "./components/ops/OpsLoginPage";
+import { OpsPage } from "./components/ops/OpsPage";
 import { LoginPage } from "./components/auth/LoginPage";
 import { RegisterPage } from "./components/auth/RegisterPage";
 import { ProtectedRoute } from "./components/auth/ProtectedRoute";
@@ -52,6 +54,9 @@ export default function App() {
           <NavLink to="/driver" className={cls}>
             Tài xế
           </NavLink>
+          <NavLink to="/ops" className={cls}>
+            Vận hành
+          </NavLink>
           {session ? (
             <a
               href="#logout"
@@ -95,6 +100,8 @@ export default function App() {
         <Route path="/tracking/:code" element={<TrackingPage />} />
         <Route path="/driver/login" element={<DriverLoginPage />} />
         <Route path="/driver" element={<DriverOrdersPage />} />
+        <Route path="/ops/login" element={<OpsLoginPage />} />
+        <Route path="/ops" element={<OpsPage />} />
       </Routes>
     </div>
   );

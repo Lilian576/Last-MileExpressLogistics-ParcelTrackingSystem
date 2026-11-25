@@ -1,0 +1,497 @@
+From d40dbf499d1d70e185d9f84a539b92b1fb3ffda8 Mon Sep 17 00:00:00 2001
+From: dev <dev@example.com>
+Date: Tue, 3 Nov 2026 01:33:38 +0000
+Subject: [PATCH 1/2] feat(driver): shipper assigned-parcels API, status
+ history, WebSocket rooms + emit on status change
+
+---
+ backend/src/main.ts                           |   2 +
+ backend/src/parcels/parcels.controller.ts     |  12 +-
+ backend/src/parcels/parcels.module.ts         |   3 +-
+ backend/src/parcels/parcels.service.spec.ts   |  73 +++++++++++-
+ backend/src/parcels/parcels.service.ts        |  54 ++++++++-
+ backend/src/tracking/tracking.gateway.spec.ts | 106 ++++++++++++++++++
+ backend/src/tracking/tracking.gateway.ts      |  62 +++++++++-
+ backend/src/tracking/tracking.module.ts       |   3 +-
+ 8 files changed, 301 insertions(+), 14 deletions(-)
+ create mode 100644 backend/src/tracking/tracking.gateway.spec.ts
+
+diff --git a/backend/src/main.ts b/backend/src/main.ts
+index 2991945..7b14b0f 100644
+--- a/backend/src/main.ts
++++ b/backend/src/main.ts
+@@ -4,6 +4,8 @@ import { ValidationPipe } from '@nestjs/common';
+ 
+ async function bootstrap() {
+   const app = await NestFactory.create(AppModule);
++  // Cho phép Frontend (Vite dev :5173) gọi REST. Production: đặt CORS_ORIGIN=https://domain1,https://domain2
++  app.enableCors({ origin: process.env.CORS_ORIGIN?.split(',') ?? true });
+   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+   await app.listen(process.env.PORT ?? 3000);
+ }
+diff --git a/backend/src/parcels/parcels.controller.ts b/backend/src/parcels/parcels.controller.ts
+index 19695c1..a76d873 100644
+--- a/backend/src/parcels/parcels.controller.ts
++++ b/backend/src/parcels/parcels.controller.ts
+@@ -3,6 +3,8 @@ import { CreateParcelDto } from './create-parcel.dto';
+ import { ParcelsService } from './parcels.service';
+ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+ import { UpdateParcelStatusDto } from './update-parcel-status.dto';
++import { RolesGuard } from '../auth/guards/roles.guard';
++import { Roles } from '../auth/decorators/roles.decorator';
+ import { TransitionActor } from '../state-machine/state-machine.types';
+ import { AssignCourierDto } from './assign-courier.dto';
+ 
+@@ -40,6 +42,14 @@ export class ParcelsController {
+     return this.parcelsService.create(dto, req.user.userId);
+   }
+ 
++  // Driver UI: danh sách đơn được giao cho shipper đang đăng nhập
++  @UseGuards(JwtAuthGuard, RolesGuard)
++  @Roles('shipper')
++  @Get('assigned/mine')
++  findAssignedToMe(@Req() req: AuthenticatedRequest) {
++    return this.parcelsService.findAssignedTo(req.user.userId);
++  }
++
+   @Get()
+   findAll() {
+     return this.parcelsService.findAll();
+@@ -59,7 +69,7 @@ export class ParcelsController {
+   ) {
+     // Tạm thời map role trong JWT sang actor của state machine
+     const actor = req.user.role as TransitionActor;
+-    return this.parcelsService.updateStatus(id, dto, actor);
++    return this.parcelsService.updateStatus(id, dto, actor, req.user.userId);
+   }
+ 
+     @UseGuards(JwtAuthGuard)
+diff --git a/backend/src/parcels/parcels.module.ts b/backend/src/parcels/parcels.module.ts
+index 8a07ad6..109fae5 100644
+--- a/backend/src/parcels/parcels.module.ts
++++ b/backend/src/parcels/parcels.module.ts
+@@ -4,9 +4,10 @@ import { ParcelsService } from './parcels.service';
+ import { PrismaService } from '../common/prisma.service';
+ import { StateMachineModule } from '../state-machine/state-machine.module';
+ import { DriverAssignmentService } from './driver-assignment.service';
++import { TrackingModule } from '../tracking/tracking.module';
+ 
+ @Module({
+-  imports: [StateMachineModule],
++  imports: [StateMachineModule, TrackingModule],
+   controllers: [ParcelsController],
+   providers: [ParcelsService, PrismaService, DriverAssignmentService],
+ })
+diff --git a/backend/src/parcels/parcels.service.spec.ts b/backend/src/parcels/parcels.service.spec.ts
+index 28ae790..995e22e 100644
+--- a/backend/src/parcels/parcels.service.spec.ts
++++ b/backend/src/parcels/parcels.service.spec.ts
+@@ -3,6 +3,7 @@ import { ParcelsService } from './parcels.service';
+ import { PrismaService } from '../common/prisma.service';
+ import { StateMachineService } from '../state-machine/state-machine.service';
+ import { DriverAssignmentService } from './driver-assignment.service';
++import { TrackingGateway } from '../tracking/tracking.gateway';
+ 
+ describe('ParcelsService - Pricing Engine', () => {
+   let service: ParcelsService;
+@@ -12,9 +13,15 @@ describe('ParcelsService - Pricing Engine', () => {
+       create: jest.fn(),
+       findMany: jest.fn(),
+       findUnique: jest.fn(),
++      update: jest.fn(),
+     },
++    parcelStatusHistory: { create: jest.fn() },
++    deliveryAssignment: { findMany: jest.fn() },
++    $transaction: jest.fn(),
+   };
+ 
++  const mockGateway = { emitStatusUpdated: jest.fn() };
++
+   const mockStateMachine = {
+     assertTransition: jest.fn(),
+   };
+@@ -24,12 +31,14 @@ describe('ParcelsService - Pricing Engine', () => {
+   };
+ 
+   beforeEach(async () => {
++    jest.clearAllMocks();
+     const module: TestingModule = await Test.createTestingModule({
+       providers: [
+         ParcelsService,
+         { provide: PrismaService, useValue: mockPrisma },
+         { provide: StateMachineService, useValue: mockStateMachine },
+         { provide: DriverAssignmentService, useValue: mockDriverAssignment },
++        { provide: TrackingGateway, useValue: mockGateway },
+       ],
+     }).compile();
+ 
+@@ -107,4 +116,66 @@ describe('ParcelsService - Pricing Engine', () => {
+       expect(fee).toBe(15000);
+     });
+   });
+-});
+\ No newline at end of file
++
++  describe('updateStatus', () => {
++    const parcel = { id: 'p1', trackingCode: 'PCL1', currentStatus: 'PENDING_PICKUP' };
++
++    it('lưu DB + ghi history rồi emit event cho đúng trackingCode', async () => {
++      mockPrisma.parcel.findUnique.mockResolvedValue(parcel);
++      mockStateMachine.assertTransition.mockReturnValue('PICKED_UP');
++      const createdAt = new Date('2026-10-27T01:00:00.000Z');
++      mockPrisma.$transaction.mockResolvedValue([
++        { ...parcel, currentStatus: 'PICKED_UP' },
++        { createdAt },
++      ]);
++
++      const result = await service.updateStatus(
++        'p1',
++        { event: 'confirm_pickup' } as never,
++        'shipper',
++        'driver-1',
++      );
++
++      expect(result.currentStatus).toBe('PICKED_UP');
++      expect(mockPrisma.parcelStatusHistory.create).toHaveBeenCalledWith({
++        data: { parcelId: 'p1', status: 'PICKED_UP', changedBy: 'driver-1' },
++      });
++      expect(mockGateway.emitStatusUpdated).toHaveBeenCalledWith({
++        trackingCode: 'PCL1',
++        currentStatus: 'PICKED_UP',
++        event: { status: 'PICKED_UP', timestamp: createdAt.toISOString() },
++      });
++    });
++
++    it('transition không hợp lệ -> throw và KHÔNG emit', async () => {
++      mockPrisma.parcel.findUnique.mockResolvedValue(parcel);
++      mockStateMachine.assertTransition.mockImplementation(() => {
++        throw new Error('invalid');
++      });
++
++      await expect(
++        service.updateStatus('p1', { event: 'confirm_delivery' } as never, 'shipper'),
++      ).rejects.toThrow('invalid');
++      expect(mockGateway.emitStatusUpdated).not.toHaveBeenCalled();
++    });
++
++    it('không tìm thấy đơn -> NotFoundException', async () => {
++      mockPrisma.parcel.findUnique.mockResolvedValue(null);
++      await expect(
++        service.updateStatus('x', { event: 'confirm_pickup' } as never, 'shipper'),
++      ).rejects.toThrow('Không tìm thấy');
++    });
++  });
++
++  describe('findAssignedTo', () => {
++    it('trả về đơn của shipper, khử trùng khi 1 đơn có 2 assignment', async () => {
++      const p = { id: 'p1', trackingCode: 'PCL1' };
++      mockPrisma.deliveryAssignment.findMany.mockResolvedValue([{ parcel: p }, { parcel: p }]);
++      const list = await service.findAssignedTo('driver-1');
++      expect(list).toEqual([p]);
++      expect(mockPrisma.deliveryAssignment.findMany).toHaveBeenCalledWith(
++        expect.objectContaining({ where: expect.objectContaining({ courierId: 'driver-1' }) }),
++      );
++    });
++  });
++});
+diff --git a/backend/src/parcels/parcels.service.ts b/backend/src/parcels/parcels.service.ts
+index 521d5b3..f64a4d7 100644
+--- a/backend/src/parcels/parcels.service.ts
++++ b/backend/src/parcels/parcels.service.ts
+@@ -7,6 +7,8 @@ import { DriverAssignmentService } from './driver-assignment.service';
+ import { AssignCourierDto } from './assign-courier.dto';
+ import { TransitionEvent } from '../state-machine/state-machine.types';
+ import { TransitionActor } from '../state-machine/state-machine.types';
++import { TERMINAL_STATES } from '../state-machine/transition-table';
++import { TrackingGateway } from '../tracking/tracking.gateway';
+ interface PricingInput {
+   weightKg: number;
+   senderLat: number;
+@@ -21,6 +23,7 @@ export class ParcelsService {
+     private readonly prisma: PrismaService,
+     private readonly stateMachine: StateMachineService,
+     private readonly driverAssignment: DriverAssignmentService,
++    private readonly trackingGateway: TrackingGateway,
+   ) {}
+ 
+   private readonly BASE_FEE = 15000; // phí cơ bản (VNĐ)
+@@ -96,7 +99,29 @@ export class ParcelsService {
+     return this.prisma.parcel.findUnique({ where: { id } });
+   }
+ 
+-    async updateStatus(id: string, dto: UpdateParcelStatusDto, actor: TransitionActor) {
++  // Đơn đang được giao cho shipper này (dùng cho Driver UI). Đơn đã kết thúc không trả về.
++  async findAssignedTo(courierId: string) {
++    const assignments = await this.prisma.deliveryAssignment.findMany({
++      where: {
++        courierId,
++        status: { in: ['assigned', 'accepted', 'in_progress'] },
++        parcel: { currentStatus: { notIn: TERMINAL_STATES } },
++      },
++      include: { parcel: true },
++      orderBy: { assignedAt: 'desc' },
++    });
++    // 1 đơn có thể có nhiều assignment (pickup + last_mile) -> khử trùng theo id
++    return [
++      ...new Map(assignments.map((a) => [a.parcel.id, a.parcel])).values(),
++    ];
++  }
++
++  async updateStatus(
++    id: string,
++    dto: UpdateParcelStatusDto,
++    actor: TransitionActor,
++    changedByUserId?: string,
++  ) {
+     const parcel = await this.prisma.parcel.findUnique({ where: { id } });
+ 
+     if (!parcel) {
+@@ -111,10 +136,29 @@ export class ParcelsService {
+       dto,
+     );
+ 
+-    return this.prisma.parcel.update({
+-      where: { id },
+-      data: { currentStatus: newStatus },
++    // Cập nhật trạng thái + ghi lịch sử trong cùng 1 transaction
++    const [updated, history] = await this.prisma.$transaction([
++      this.prisma.parcel.update({
++        where: { id },
++        data: { currentStatus: newStatus },
++      }),
++      this.prisma.parcelStatusHistory.create({
++        data: {
++          parcelId: id,
++          status: newStatus,
++          changedBy: changedByUserId ?? null,
++        },
++      }),
++    ]);
++
++    // Chỉ emit SAU KHI DB đã lưu thành công
++    this.trackingGateway.emitStatusUpdated({
++      trackingCode: updated.trackingCode,
++      currentStatus: newStatus,
++      event: { status: newStatus, timestamp: history.createdAt.toISOString() },
+     });
++
++    return updated;
+   }
+     async assignCourier(parcelId: string, dto: AssignCourierDto, actor: TransitionActor) {
+     const result = await this.driverAssignment.assignNearestCourier(
+@@ -139,4 +183,4 @@ export class ParcelsService {
+ 
+     return { parcel: updatedParcel, assignmentResult: result };
+   }
+-}
+\ No newline at end of file
++}
+diff --git a/backend/src/tracking/tracking.gateway.spec.ts b/backend/src/tracking/tracking.gateway.spec.ts
+new file mode 100644
+index 0000000..287373a
+--- /dev/null
++++ b/backend/src/tracking/tracking.gateway.spec.ts
+@@ -0,0 +1,106 @@
++import { INestApplication } from '@nestjs/common';
++import { Test } from '@nestjs/testing';
++import { Server } from 'http';
++import { AddressInfo } from 'net';
++import { io, Socket } from 'socket.io-client';
++import { TrackingGateway, TRACKING_EVENTS } from './tracking.gateway';
++
++// Test WebSocket thật: server Nest + client socket.io, không cần DB.
++describe('TrackingGateway (WebSocket)', () => {
++  let app: INestApplication;
++  let gateway: TrackingGateway;
++  let url: string;
++  const sockets: Socket[] = [];
++
++  const connect = (): Promise<Socket> =>
++    new Promise((resolve) => {
++      const s = io(url, { transports: ['websocket'] });
++      sockets.push(s);
++      s.on('connect', () => resolve(s));
++    });
++
++  const join = (s: Socket, trackingCode: string) =>
++    s.emitWithAck('join:parcel', { trackingCode }) as Promise<{ ok: boolean }>;
++
++  const update = (trackingCode: string, status: 'PICKED_UP' | 'DELIVERED') => ({
++    trackingCode,
++    currentStatus: status,
++    event: { status, timestamp: '2026-10-27T01:00:00.000Z' },
++  });
++
++  beforeAll(async () => {
++    const moduleRef = await Test.createTestingModule({
++      providers: [TrackingGateway],
++    }).compile();
++    app = moduleRef.createNestApplication();
++    await app.listen(0);
++    const server = app.getHttpServer() as Server;
++    url = `http://localhost:${(server.address() as AddressInfo).port}`;
++    gateway = app.get(TrackingGateway);
++  });
++
++  afterAll(async () => {
++    sockets.forEach((s) => s.disconnect());
++    await app.close();
++  });
++
++  it('client trong room nhận parcel.status.updated, client room khác thì không', async () => {
++    const a = await connect();
++    const b = await connect();
++    expect(await join(a, 'PCL-A')).toEqual({ ok: true, trackingCode: 'PCL-A' });
++    await join(b, 'PCL-B');
++
++    const gotA = new Promise((r) => a.once(TRACKING_EVENTS.STATUS_UPDATED, r));
++    const gotB = jest.fn();
++    b.on(TRACKING_EVENTS.STATUS_UPDATED, gotB);
++
++    gateway.emitStatusUpdated(update('PCL-A', 'PICKED_UP'));
++
++    expect(await gotA).toEqual(update('PCL-A', 'PICKED_UP'));
++    await new Promise((r) => setTimeout(r, 150));
++    expect(gotB).not.toHaveBeenCalled();
++  });
++
++  it('DELIVERED phát thêm parcel.delivery.completed', async () => {
++    const a = await connect();
++    await join(a, 'PCL-D');
++    const done = new Promise((r) =>
++      a.once(TRACKING_EVENTS.DELIVERY_COMPLETED, r),
++    );
++    gateway.emitStatusUpdated(update('PCL-D', 'DELIVERED'));
++    expect(await done).toEqual(update('PCL-D', 'DELIVERED'));
++  });
++
++  it('leave:parcel thì không nhận nữa', async () => {
++    const a = await connect();
++    await join(a, 'PCL-L');
++    await a.emitWithAck('leave:parcel', { trackingCode: 'PCL-L' });
++    const got = jest.fn();
++    a.on(TRACKING_EVENTS.STATUS_UPDATED, got);
++    gateway.emitStatusUpdated(update('PCL-L', 'PICKED_UP'));
++    await new Promise((r) => setTimeout(r, 150));
++    expect(got).not.toHaveBeenCalled();
++  });
++
++  it('join thiếu trackingCode -> ok:false', async () => {
++    const a = await connect();
++    expect(await a.emitWithAck('join:parcel', {})).toEqual({
++      ok: false,
++      error: 'trackingCode is required',
++    });
++  });
++
++  it('mất mạng rồi reconnect: join lại room thì nhận event tiếp', async () => {
++    const a = await connect();
++    await join(a, 'PCL-R');
++    a.disconnect();
++    await new Promise<void>((r) => {
++      a.once('connect', () => r());
++      a.connect();
++    });
++    await join(a, 'PCL-R');
++    const got = new Promise((r) => a.once(TRACKING_EVENTS.STATUS_UPDATED, r));
++    gateway.emitStatusUpdated(update('PCL-R', 'PICKED_UP'));
++    expect(await got).toEqual(update('PCL-R', 'PICKED_UP'));
++  });
++});
+diff --git a/backend/src/tracking/tracking.gateway.ts b/backend/src/tracking/tracking.gateway.ts
+index 91ebd25..c2fdca5 100644
+--- a/backend/src/tracking/tracking.gateway.ts
++++ b/backend/src/tracking/tracking.gateway.ts
+@@ -6,6 +6,29 @@ import {
+   ConnectedSocket,
+ } from '@nestjs/websockets';
+ import { Server, Socket } from 'socket.io';
++import { ParcelStatus } from '@prisma/client';
++
++// Hợp đồng event với Frontend (xem Frontend/README.md, mục "Hợp đồng WebSocket")
++export const TRACKING_EVENTS = {
++  STATUS_UPDATED: 'parcel.status.updated',
++  DELIVERY_COMPLETED: 'parcel.delivery.completed',
++} as const;
++
++export interface ParcelStatusUpdatePayload {
++  trackingCode: string;
++  currentStatus: ParcelStatus;
++  event: { status: ParcelStatus; timestamp: string; note?: string };
++}
++
++export const parcelRoom = (trackingCode: string) => `parcel:${trackingCode}`;
++
++function readTrackingCode(body: unknown): string | null {
++  if (typeof body !== 'object' || body === null) return null;
++  const code = (body as { trackingCode?: unknown }).trackingCode;
++  if (typeof code !== 'string') return null;
++  const trimmed = code.trim();
++  return trimmed.length > 0 && trimmed.length <= 64 ? trimmed : null;
++}
+ 
+ @WebSocketGateway({
+   cors: { origin: '*' },
+@@ -15,11 +38,40 @@ export class TrackingGateway {
+   server: Server;
+ 
+   @SubscribeMessage('ping')
+-  handlePing(
+-    @MessageBody() data: string,
+-    @ConnectedSocket() client: Socket,
+-  ) {
++  handlePing(@MessageBody() data: string, @ConnectedSocket() client: Socket) {
+     console.log('Nhận được ping:', data);
+     client.emit('pong', 'pong tu server'); // gửi thẳng lại cho đúng client vừa gửi
+   }
+-}
+\ No newline at end of file
++
++  // Client (trang tracking) vào room theo mã vận đơn để nhận cập nhật của đúng đơn đó
++  @SubscribeMessage('join:parcel')
++  async handleJoinParcel(
++    @MessageBody() body: unknown,
++    @ConnectedSocket() client: Socket,
++  ) {
++    const trackingCode = readTrackingCode(body);
++    if (!trackingCode) return { ok: false, error: 'trackingCode is required' };
++    await client.join(parcelRoom(trackingCode));
++    return { ok: true, trackingCode };
++  }
++
++  @SubscribeMessage('leave:parcel')
++  async handleLeaveParcel(
++    @MessageBody() body: unknown,
++    @ConnectedSocket() client: Socket,
++  ) {
++    const trackingCode = readTrackingCode(body);
++    if (!trackingCode) return { ok: false, error: 'trackingCode is required' };
++    await client.leave(parcelRoom(trackingCode));
++    return { ok: true, trackingCode };
++  }
++
++  // Được ParcelsService gọi SAU KHI StateMachineService validate + lưu DB thành công
++  emitStatusUpdated(update: ParcelStatusUpdatePayload) {
++    const room = parcelRoom(update.trackingCode);
++    this.server.to(room).emit(TRACKING_EVENTS.STATUS_UPDATED, update);
++    if (update.currentStatus === 'DELIVERED') {
++      this.server.to(room).emit(TRACKING_EVENTS.DELIVERY_COMPLETED, update);
++    }
++  }
++}
+diff --git a/backend/src/tracking/tracking.module.ts b/backend/src/tracking/tracking.module.ts
+index f907eca..e5fe154 100644
+--- a/backend/src/tracking/tracking.module.ts
++++ b/backend/src/tracking/tracking.module.ts
+@@ -3,5 +3,6 @@ import { TrackingGateway } from './tracking.gateway';
+ 
+ @Module({
+   providers: [TrackingGateway],
++  exports: [TrackingGateway], // ParcelsService cần gọi emitStatusUpdated()
+ })
+-export class TrackingModule {}
+\ No newline at end of file
++export class TrackingModule {}
+-- 
+2.43.0
+
