@@ -3,6 +3,8 @@ import { ParcelsService } from './parcels.service';
 import { PrismaService } from '../common/prisma.service';
 import { StateMachineService } from '../state-machine/state-machine.service';
 import { DriverAssignmentService } from './driver-assignment.service';
+import { ParcelNotifierService } from './parcel-notifier.service';
+import { TransitionEvent } from '../state-machine/state-machine.types';
 
 describe('ParcelsService - Pricing Engine', () => {
   let service: ParcelsService;
@@ -12,8 +14,14 @@ describe('ParcelsService - Pricing Engine', () => {
       create: jest.fn(),
       findMany: jest.fn(),
       findUnique: jest.fn(),
+      update: jest.fn(),
     },
+    parcelStatusHistory: { create: jest.fn() },
+    deliveryAssignment: { findMany: jest.fn(), updateMany: jest.fn() },
+    $transaction: jest.fn(),
   };
+
+  const mockNotifier = { onTransition: jest.fn() };
 
   const mockStateMachine = {
     assertTransition: jest.fn(),
@@ -24,12 +32,14 @@ describe('ParcelsService - Pricing Engine', () => {
   };
 
   beforeEach(async () => {
+    jest.clearAllMocks();
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ParcelsService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: StateMachineService, useValue: mockStateMachine },
         { provide: DriverAssignmentService, useValue: mockDriverAssignment },
+        { provide: ParcelNotifierService, useValue: mockNotifier },
       ],
     }).compile();
 
@@ -41,11 +51,14 @@ describe('ParcelsService - Pricing Engine', () => {
   });
 
   it('should create a new parcel and attach fee', async () => {
+    mockStateMachine.assertTransition.mockReturnValue('CREATED');
     mockPrisma.parcel.create.mockResolvedValue({
       id: 'fake-uuid',
       trackingCode: 'PCL123',
       currentStatus: 'CREATED',
       receiverName: 'Trần Thị B',
+      feeVnd: 30000,
+      statusHistory: [{ id: 'h0', status: 'CREATED', createdAt: new Date() }],
     });
 
     const parcel = await service.create(
@@ -105,6 +118,189 @@ describe('ParcelsService - Pricing Engine', () => {
         receiverLng: 106.0,
       });
       expect(fee).toBe(15000);
+    });
+  });
+
+  describe('updateStatus', () => {
+    const user = { userId: 'driver-1', role: 'shipper' as const };
+    const parcel = {
+      id: 'p1',
+      trackingCode: 'PCL1',
+      currentStatus: 'PENDING_PICKUP',
+    };
+
+    beforeEach(() => {
+      mockPrisma.$transaction.mockImplementation(
+        (work: (tx: typeof mockPrisma) => Promise<unknown>) => work(mockPrisma),
+      );
+      mockPrisma.parcel.findUnique.mockResolvedValue(parcel);
+      mockPrisma.deliveryAssignment.findMany.mockResolvedValue([
+        { courierId: user.userId },
+      ]);
+    });
+
+    it('ghi lịch sử trong transaction trước khi phát trạng thái', async () => {
+      const updated = {
+        ...parcel,
+        currentStatus: 'PICKED_UP',
+        currentLocationId: null,
+      };
+      const createdAt = new Date('2026-10-27T01:00:00.000Z');
+      mockStateMachine.assertTransition.mockReturnValue(updated.currentStatus);
+      mockPrisma.parcel.update.mockResolvedValue(updated);
+      mockPrisma.parcelStatusHistory.create.mockResolvedValue({
+        id: 'h1',
+        status: updated.currentStatus,
+        createdAt,
+      });
+
+      const result = await service.updateStatus(
+        'p1',
+        { event: TransitionEvent.CONFIRM_PICKUP },
+        user,
+      );
+
+      expect(result).toEqual(updated);
+      expect(mockPrisma.parcelStatusHistory.create).toHaveBeenCalledWith({
+        data: {
+          parcelId: 'p1',
+          status: 'PICKED_UP',
+          changedBy: user.userId,
+          locationId: null,
+        },
+      });
+      expect(mockNotifier.onTransition).toHaveBeenCalledWith(
+        'p1',
+        'PENDING_PICKUP',
+        'PICKED_UP',
+        'shipper',
+        {
+          id: 'h1',
+          update: {
+            trackingCode: 'PCL1',
+            currentStatus: 'PICKED_UP',
+            event: { status: 'PICKED_UP', timestamp: createdAt.toISOString() },
+          },
+        },
+      );
+      expect(
+        mockPrisma.parcelStatusHistory.create.mock.invocationCallOrder[0],
+      ).toBeLessThan(mockNotifier.onTransition.mock.invocationCallOrder[0]);
+    });
+
+    it('không phát sự kiện khi tài xế không được giao đơn', async () => {
+      mockPrisma.deliveryAssignment.findMany.mockResolvedValue([]);
+      await expect(
+        service.updateStatus(
+          'p1',
+          { event: TransitionEvent.DEPART_TO_HUB },
+          user,
+        ),
+      ).rejects.toThrow('không có quyền');
+      expect(mockPrisma.parcel.update).not.toHaveBeenCalled();
+      expect(mockNotifier.onTransition).not.toHaveBeenCalled();
+    });
+
+    it('không tìm thấy đơn thì trả lỗi', async () => {
+      mockPrisma.parcel.findUnique.mockResolvedValue(null);
+      await expect(
+        service.updateStatus(
+          'x',
+          { event: TransitionEvent.CONFIRM_PICKUP },
+          user,
+        ),
+      ).rejects.toThrow('Không tìm thấy');
+    });
+  });
+
+  describe('findAssignedTo', () => {
+    it('trả về đơn của shipper, khử trùng khi 1 đơn có 2 assignment', async () => {
+      const p = { id: 'p1', trackingCode: 'PCL1' };
+      mockPrisma.deliveryAssignment.findMany.mockResolvedValue([
+        { parcel: p },
+        { parcel: p },
+      ]);
+      const list = await service.findAssignedTo('driver-1');
+      expect(list).toEqual([p]);
+      const [args] = mockPrisma.deliveryAssignment.findMany.mock.calls[0] as [
+        { where: { courierId: string } },
+      ];
+      expect(args.where.courierId).toBe('driver-1');
+    });
+  });
+  describe('findPublicTracking', () => {
+    const createdAt = new Date('2026-10-27T01:00:00.000Z');
+    const base = {
+      id: 'p1',
+      trackingCode: 'PCL1',
+      currentStatus: 'PICKED_UP',
+      receiverName: 'An',
+      receiverPhone: '0900000000',
+      receiverAddress: '1 Lê Lợi',
+      senderId: 'u1',
+      createdAt,
+    };
+
+    it('trả lịch sử theo thứ tự, bổ sung mốc CREATED khi DB chưa có', async () => {
+      mockPrisma.parcel.findUnique.mockResolvedValue({
+        ...base,
+        statusHistory: [
+          {
+            status: 'PICKED_UP',
+            createdAt: new Date('2026-10-27T02:00:00.000Z'),
+            note: null,
+          },
+        ],
+      });
+
+      const result = await service.findPublicTracking('PCL1');
+
+      expect(result.history).toEqual([
+        { status: 'CREATED', timestamp: createdAt.toISOString() },
+        { status: 'PICKED_UP', timestamp: '2026-10-27T02:00:00.000Z' },
+      ]);
+      expect(result.currentStatus).toBe('PICKED_UP');
+    });
+
+    it('không thêm CREATED lần 2 nếu lịch sử đã bắt đầu bằng CREATED', async () => {
+      mockPrisma.parcel.findUnique.mockResolvedValue({
+        ...base,
+        currentStatus: 'CREATED',
+        statusHistory: [{ status: 'CREATED', createdAt, note: 'tạo đơn' }],
+      });
+
+      const result = await service.findPublicTracking('PCL1');
+
+      expect(result.history).toEqual([
+        {
+          status: 'CREATED',
+          timestamp: createdAt.toISOString(),
+        },
+      ]);
+    });
+
+    it('KHÔNG lộ SĐT, địa chỉ người nhận hay thông tin người gửi', async () => {
+      mockPrisma.parcel.findUnique.mockResolvedValue({
+        ...base,
+        statusHistory: [],
+      });
+
+      const result = await service.findPublicTracking('PCL1');
+
+      expect(Object.keys(result).sort()).toEqual([
+        'currentStatus',
+        'history',
+        'location',
+        'receiverName',
+        'trackingCode',
+      ]);
+    });
+
+    it('không tìm thấy mã -> NotFoundException', async () => {
+      mockPrisma.parcel.findUnique.mockResolvedValue(null);
+      await expect(service.findPublicTracking('NOPE')).rejects.toThrow(
+        'Không tìm thấy',
+      );
     });
   });
 });

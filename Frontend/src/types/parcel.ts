@@ -116,3 +116,22 @@ export interface Parcel {
   currentStatus: ParcelStatus;
   history: ParcelEvent[];
 }
+
+// Payload event WebSocket `parcel.status.updated` / `parcel.delivery.completed`
+// (khớp ParcelStatusUpdatePayload ở backend/src/tracking/tracking.gateway.ts).
+// Chỉ là "bản vá" (trạng thái mới + 1 mốc lịch sử), client tự ghép vào Parcel
+// đang hiển thị — backend không cần dựng lại cả Parcel của Frontend.
+export interface ParcelStatusUpdate {
+  trackingCode: string;
+  currentStatus: ParcelStatus;
+  event: ParcelEvent;
+}
+
+// Event `parcel.location.updated` (server -> room) — vị trí GPS mới nhất của tài xế.
+// Tài xế gửi `driver:location` { trackingCode, latitude, longitude }; server gắn timestamp rồi phát lại.
+export interface ParcelLocationUpdate {
+  trackingCode: string;
+  latitude: number;
+  longitude: number;
+  timestamp: string; // ISO string
+}

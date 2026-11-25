@@ -1,0 +1,54 @@
+@startuml
+title LeMail - Status update and after-commit handoff
+skinparam shadowing false
+skinparam dpi 150
+actor Shipper
+participant "Rate limiter" as Limit
+participant "JWT / controller" as API
+participant ParcelsService as Service
+participant StateMachineService as SM
+database PostgreSQL as DB
+participant TrackingGateway as WS
+actor Customer
+Shipper -> Limit : PATCH /api/parcels/{id}/status
+alt quota exceeded
+  Limit --> Shipper : 429 + Retry-After
+else quota available
+  Limit -> API : next
+  API -> API : verify JWT
+  API -> Service : updateStatus(id, dto, actor, userId)
+  Service -> DB : read parcel
+  Service -> SM : assertTransition(status, event, actor, dto)
+  note right of SM
+    Main still trusts client context.
+    B02 must derive guard data from DB
+    and verify owner / assignment.
+  end note
+  alt invalid actor / transition / guard
+    SM --> API : 400 / 403
+    API --> Shipper : rejected
+  else valid
+    SM --> Service : next status
+    Service -> DB : BEGIN; UPDATE parcel; INSERT history
+    alt write fails
+      DB --> Service : rollback / error
+      Service --> API : error, no emit
+    else commit succeeds
+      DB --> Service : updated parcel + history
+      Service -> WS : emitStatusUpdated(snapshot)
+      WS --> Customer : parcel.status.updated
+      opt DELIVERED
+        WS --> Customer : parcel.delivery.completed
+      end
+      Service --> API : updated parcel
+      API --> Shipper : 200
+    end
+  end
+end
+note over Service,WS
+  B02 replaces direct gateway call with onTransition after commit
+  for create, initial assignment and later status changes.
+  B03 sends the signed HTTP webhook through the same notifier.
+  These integrations are pending, not accepted by this diagram.
+end note
+@enduml

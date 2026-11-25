@@ -1,5 +1,6 @@
 import { Address } from "../../types/parcel";
 import { Field } from "../shared/Field";
+import { PROVINCES } from "../../lib/geo"; // cùng bảng toạ độ dùng để tính phí
 
 interface Props {
   sender: Address;
@@ -7,17 +8,6 @@ interface Props {
   errors: Record<string, string>;
   onChange: (which: "sender" | "receiver", field: keyof Address, value: string) => void;
 }
-
-const PROVINCES = [
-  "TP. Hồ Chí Minh",
-  "Hà Nội",
-  "Đà Nẵng",
-  "Cần Thơ",
-  "Hải Phòng",
-  "Bình Dương",
-  "Đồng Nai",
-  "Khánh Hòa",
-];
 
 function AddressForm({
   title,

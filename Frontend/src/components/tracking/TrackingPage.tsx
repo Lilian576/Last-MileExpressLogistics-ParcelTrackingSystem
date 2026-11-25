@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { Parcel, ParcelStatus } from "../../types/parcel";
+import { Parcel, ParcelLocationUpdate, ParcelStatus } from "../../types/parcel";
 import {
   subscribeToParcel,
+  subscribeToLocation,
   trackParcel,
   USE_MOCK,
   REALTIME_MODE,
@@ -10,6 +11,7 @@ import {
 } from "../../api/parcelApi";
 import { mockForceTransition } from "../../api/mockBackend";
 import { Timeline } from "./Timeline";
+import { DriverMap } from "./DriverMap";
 
 const FINISHED_STATUSES: ParcelStatus[] = ["DELIVERED", "RETURNED", "CANCELLED", "LOST"];
 
@@ -22,18 +24,33 @@ export function TrackingPage() {
   const [loading, setLoading] = useState(false);
   const [notFound, setNotFound] = useState(false);
   const [connected, setConnected] = useState(false);
+  const [location, setLocation] = useState<ParcelLocationUpdate | null>(null);
+
+  // Vị trí tài xế (event parcel.location.updated) — chỉ theo dõi khi đơn chưa kết thúc
+  const finished = parcel ? FINISHED_STATUSES.includes(parcel.currentStatus) : true;
+  const trackedCode = parcel?.trackingCode;
+  useEffect(() => {
+    if (!trackedCode || finished) return;
+    return subscribeToLocation(trackedCode, setLocation);
+  }, [trackedCode, finished]);
 
   useEffect(() => {
     if (!code) return;
     let cleanup: (() => void) | undefined;
+    // Cờ chống race: nếu effect bị dọn (đổi mã / unmount / StrictMode chạy 2 lần)
+    // trước khi trackParcel() trả về thì KHÔNG được mở subscription nữa, nếu không
+    // socket sẽ bị rò rỉ và nhận event trùng.
+    let cancelled = false;
 
     setLoading(true);
     setNotFound(false);
     setParcel(null);
+    setLocation(null);
 
     // 1. Lấy snapshot hiện tại (GET /api/public/track/:code)
     trackParcel(code)
       .then((p) => {
+        if (cancelled) return;
         if (!p) {
           setNotFound(true);
           return;
@@ -42,9 +59,14 @@ export function TrackingPage() {
         // 2. Nhận cập nhật tiếp theo qua polling hoặc WebSocket (tùy REALTIME_MODE)
         cleanup = subscribeToParcel(code, (updated) => setParcel(updated), setConnected);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
 
-    return () => cleanup?.();
+    return () => {
+      cancelled = true;
+      cleanup?.();
+    };
   }, [code]);
 
   function handleSearch(e: React.FormEvent) {
@@ -103,9 +125,29 @@ export function TrackingPage() {
           </div>
 
           <p className="muted" style={{ marginTop: 12 }}>
-            Từ <b>{parcel.sender.province}</b> đến <b>{parcel.receiver.province}</b> · Người nhận:{" "}
-            {parcel.receiver.fullName}
+            {parcel.sender.province && parcel.receiver.province && (
+              <>
+                Từ <b>{parcel.sender.province}</b> đến <b>{parcel.receiver.province}</b> ·{" "}
+              </>
+            )}
+            Người nhận: {parcel.receiver.fullName}
           </p>
+
+          {!finished && (
+            <div style={{ marginTop: 16 }}>
+              {location ? (
+                <>
+                  <DriverMap location={location} />
+                  <div className="muted" style={{ marginTop: 6 }}>
+                    📍 Vị trí tài xế: {location.latitude.toFixed(5)}, {location.longitude.toFixed(5)} · cập nhật lúc{" "}
+                    {new Date(location.timestamp).toLocaleTimeString("vi-VN")}
+                  </div>
+                </>
+              ) : (
+                <div className="muted">📍 Chưa có vị trí tài xế — sẽ hiện khi tài xế bắt đầu di chuyển.</div>
+              )}
+            </div>
+          )}
 
           <Timeline history={parcel.history} currentStatus={parcel.currentStatus} />
 

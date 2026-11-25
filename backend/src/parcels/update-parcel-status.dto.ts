@@ -1,4 +1,10 @@
-import { IsEnum, IsOptional, IsBoolean, IsNumber } from 'class-validator';
+import {
+  IsEnum,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+} from 'class-validator';
 import { TransitionEvent } from '../state-machine/state-machine.types';
 
 export class UpdateParcelStatusDto {
@@ -6,34 +12,12 @@ export class UpdateParcelStatusDto {
   event: TransitionEvent;
 
   @IsOptional()
-  @IsBoolean()
-  hasAvailableCourier?: boolean;
+  @IsString()
+  @IsNotEmpty()
+  hubId?: string;
 
   @IsOptional()
-  @IsBoolean()
-  isAssignedCourier?: boolean;
-
-  @IsOptional()
-  @IsBoolean()
-  isHubLocation?: boolean;
-
-  @IsOptional()
-  @IsBoolean()
-  isFinalHub?: boolean;
-
-  @IsOptional()
-  @IsNumber()
-  hoursSinceLastUpdate?: number;
-
-  @IsOptional()
-  @IsBoolean()
-  hasDeliveryProof?: boolean;
-
-  @IsOptional()
-  @IsNumber()
-  failedAttemptCount?: number;
-
-  @IsOptional()
-  @IsNumber()
-  maxRetryAttempts?: number;
+  @IsString()
+  @MaxLength(200)
+  deliveryProofRef?: string;
 }

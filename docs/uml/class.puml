@@ -1,0 +1,77 @@
+@startuml
+title LeMail - Classes at the M3 handoff
+skinparam shadowing false
+skinparam dpi 150
+hide empty methods
+class User {
+  id: UUID
+  role: customer | shipper | warehouse_staff | admin
+  email: String (unique)
+  passwordHash: String
+  currentLatitude/Longitude: Decimal?
+}
+class Parcel {
+  id: UUID
+  trackingCode: String (unique)
+  currentStatus: ParcelStatus
+  failedAttemptCount: Int
+  weightKg: Decimal
+  feeVnd: Int?
+  senderLat/Lng: Decimal?
+  receiverLat/Lng: Decimal?
+  deliveryProof: String?
+  deliveredAt: DateTime?
+}
+class ParcelStatusHistory {
+  id: UUID
+  status: ParcelStatus
+  createdAt: DateTime
+  note: String?
+}
+class Location {
+  id: String
+  type: LocationType
+  latitude/longitude: Decimal
+}
+class DeliveryAssignment {
+  id: UUID
+  assignmentType: pickup | last_mile | hub_transfer
+  status: AssignmentStatus
+  completedAt: DateTime?
+}
+class StateMachineService {
+  validateTransition(from, event, actor, context)
+  assertTransition(from, event, actor, context)
+}
+class ParcelsService {
+  create(dto, senderId)
+  updateStatus(id, dto, actor, userId)
+  assignCourier(id, dto, actor)
+}
+interface TransitionNotifier {
+  onTransition(parcelId, from, to, actor): Promise<void>
+}
+class TrackingGateway {
+  emitStatusUpdated(update)
+}
+User "1" -- "0..*" Parcel : sender
+User "1" -- "0..*" DeliveryAssignment : courier
+User "0..1" -- "0..*" ParcelStatusHistory : changedBy
+Parcel "1" -- "0..*" ParcelStatusHistory
+Parcel "1" -- "0..*" DeliveryAssignment
+Location "0..1" -- "0..*" Parcel : origin/destination/current
+Location "0..1" -- "0..*" ParcelStatusHistory
+Location "0..1" -- "0..*" Location : parent
+ParcelsService ..> StateMachineService : validates
+ParcelsService ..> TrackingGateway : current after-commit call
+ParcelsService ..> TransitionNotifier : B02 handoff
+note bottom of TransitionNotifier
+  Interface is a contract.
+  B02 must wire create / assign / status
+  to one after-commit notifier.
+end note
+note bottom of Parcel
+  New fields nullable for legacy rows.
+  B01 must connect the API write path.
+end note
+@enduml

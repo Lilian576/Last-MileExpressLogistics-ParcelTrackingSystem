@@ -1,6 +1,7 @@
-import { IsString, IsNumber, IsNotEmpty } from 'class-validator';
+import { IsString, IsNotEmpty, IsOptional } from 'class-validator';
+import { CalculateFeeDto } from './calculate-fee.dto';
 
-export class CreateParcelDto {
+export class CreateParcelDto extends CalculateFeeDto {
   @IsString()
   @IsNotEmpty()
   receiverName: string;
@@ -13,18 +14,7 @@ export class CreateParcelDto {
   @IsNotEmpty()
   receiverAddress: string;
 
-  @IsNumber()
-  weightKg: number;
-
-  @IsNumber()
-  senderLat: number;
-
-  @IsNumber()
-  senderLng: number;
-
-  @IsNumber()
-  receiverLat: number;
-
-  @IsNumber()
-  receiverLng: number;
+  @IsOptional()
+  @IsString()
+  dimensions?: string;
 }

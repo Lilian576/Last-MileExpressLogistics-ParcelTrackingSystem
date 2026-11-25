@@ -1,0 +1,55 @@
+@startuml
+title LeMail - Use cases and MVP roles
+left to right direction
+skinparam dpi 150
+skinparam shadowing false
+actor Customer
+actor Shipper
+actor "Warehouse staff" as Warehouse
+actor "Admin / dispatcher" as Admin
+actor "Internal system job" as System
+actor "Public viewer" as Viewer
+rectangle "Parcel tracking" {
+  usecase "US-01 Create parcel\nand calculate fee" as Create
+  usecase "US-02 Assign pickup" as Assign
+  usecase "US-03 Confirm pickup" as Pickup
+  usecase "US-04 Depart / receive /\ntransfer hub" as Hub
+  usecase "US-04 Dispatch last mile" as Dispatch
+  usecase "US-05 Confirm delivery\nwith verified evidence" as Deliver
+  usecase "US-06 Report delivery failure" as Failure
+  usecase "US-06 Retry / return decision" as Retry
+  usecase "US-07 Confirm return" as Return
+  usecase "US-08 Cancel before pickup" as Cancel
+  usecase "US-09 SLA timeout" as Lost
+  usecase "Public tracking\nREST + Socket.IO" as Track
+}
+Customer --> Create
+Customer --> Cancel
+Customer --> Track
+Viewer --> Track
+Admin --> Assign
+Admin --> Dispatch
+Shipper --> Pickup
+Shipper --> Hub
+Warehouse --> Hub
+Shipper --> Deliver
+Shipper --> Failure
+Shipper --> Return
+System --> Assign
+System --> Retry
+System --> Lost
+note bottom of Admin
+  Prisma role = admin.
+  No dispatcher login in MVP.
+end note
+note bottom of System
+  Target job design.
+  SLA/retry jobs and claim tickets
+  still require B01 integration.
+end note
+note bottom of Deliver
+  D01 prepares evidence columns.
+  B01 validates and persists evidence.
+  Full workflow acceptance belongs to Q01/Q03.
+end note
+@enduml
