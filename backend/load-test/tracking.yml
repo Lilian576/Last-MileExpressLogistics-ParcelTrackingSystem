@@ -1,0 +1,33 @@
+config:
+  target: "{{ $env.API_BASE_URL }}"
+  phases:
+    - duration: 30
+      arrivalRate: 5
+      name: warm-up
+    - duration: 60
+      arrivalRate: 10
+      name: sustained-tracking
+  defaults:
+    headers:
+      content-type: application/json
+
+scenarios:
+  - name: public tracking and fee quote
+    flow:
+      - post:
+          url: "/api/parcels/calculate-fee"
+          json:
+            weightKg: 2
+            senderLat: 10.776
+            senderLng: 106.701
+            receiverLat: 10.823
+            receiverLng: 106.629
+          capture:
+            - json: "$.fee"
+              as: fee
+          expect:
+            - statusCode: 201
+      - get:
+          url: "/api/public/track/LM_LOAD_TEST_NOT_FOUND"
+          expect:
+            - statusCode: 404
