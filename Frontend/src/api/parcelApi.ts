@@ -8,7 +8,6 @@ import {
   ParcelLocationUpdate,
   QuoteRequest,
   QuoteResponse,
-  TERMINAL_STATUSES,
 } from "../types/parcel";
 import {
   mockCreateParcel,
@@ -39,10 +38,6 @@ export const USE_MOCK = import.meta.env.VITE_USE_MOCK === "true";
 export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000"; // NestJS thật, không có global prefix
 export const SOCKET_URL: string = import.meta.env.VITE_SOCKET_URL ?? API_BASE_URL; // Socket.io server URL
 
-// "websocket": TrackingGateway (backend/src/tracking) phát `parcel.status.updated`
-// mỗi khi PATCH /api/parcels/:id/status thành công. "polling" là phương án dự phòng.
-export const REALTIME_MODE: "polling" | "websocket" = "websocket";
-export const POLLING_INTERVAL_MS = 4000;
 // ================================================================
 
 // Header JWT cho các API cần đăng nhập. Chưa đăng nhập -> AuthExpiredError để UI chuyển về /login.
@@ -78,11 +73,18 @@ export async function createParcel(req: CreateParcelRequest): Promise<Parcel> {
   return { ...created, sender: req.sender, packageInfo: req.packageInfo, feeVnd: created.feeVnd || req.feeVnd };
 }
 
+// GET /api/public/track/:code (công khai). Trả null khi mã không tồn tại (404);
+// ném Error có thông báo tiếng Việt khi API lỗi hoặc không kết nối được máy chủ.
 export async function trackParcel(trackingCode: string): Promise<Parcel | null> {
   if (USE_MOCK) return mockTrackParcel(trackingCode);
-  const res = await fetch(`${API_BASE_URL}/api/public/track/${encodeURIComponent(trackingCode)}`);
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE_URL}/api/public/track/${encodeURIComponent(trackingCode)}`);
+  } catch {
+    throw new Error("Không kết nối được tới máy chủ. Vui lòng kiểm tra mạng rồi thử lại.");
+  }
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error("Không tra cứu được đơn hàng.");
+  if (!res.ok) throw await readError(res, `Máy chủ trả lỗi (${res.status}) khi tra cứu đơn hàng.`);
   return toParcel((await res.json()) as PublicTrackResponse);
 }
 
@@ -118,83 +120,71 @@ export async function listMyParcels(): Promise<Parcel[]> {
   return ((await res.json()) as BackendParcel[]).map((p) => fromBackendParcel(p, name));
 }
 
-// ---- Chế độ Tuần 3: polling REST (chưa có WebSocket) ----
-function subscribeToParcelPolling(
-  trackingCode: string,
-  onUpdate: (parcel: Parcel) => void,
-  onConnectionChange?: (connected: boolean) => void
-): () => void {
-  let stopped = false;
-  onConnectionChange?.(true);
+// ---- Real-time tracking: MỘT socket cho cả trạng thái lẫn vị trí tài xế ----
+// Hợp đồng (backend/src/tracking/tracking.gateway.ts):
+//   client -> server: `join:parcel` / `leave:parcel` { trackingCode } (ack { ok, error? })
+//   server -> room  : `parcel.status.updated`, `parcel.delivery.completed` (bản vá trạng thái),
+//                     `parcel.location.updated` { trackingCode, latitude, longitude, timestamp }
+export type SyncResult = { ok: true; at: Date } | { ok: false; message: string };
 
-  const tick = async () => {
-    if (stopped) return;
-    try {
-      const parcel = await trackParcel(trackingCode);
-      if (stopped) return;
-      if (parcel) {
-        onUpdate(parcel);
-        if (TERMINAL_STATUSES.includes(parcel.currentStatus)) {
-          onConnectionChange?.(false); // đơn đã kết thúc, không cần poll nữa
-          return;
-        }
-      }
-      onConnectionChange?.(true);
-    } catch {
-      onConnectionChange?.(false);
-    }
-    if (!stopped) timer = setTimeout(tick, POLLING_INTERVAL_MS);
-  };
-
-  let timer = setTimeout(tick, POLLING_INTERVAL_MS);
-
-  return () => {
-    stopped = true;
-    clearTimeout(timer);
-  };
+export interface RealtimeHandlers {
+  onParcel: (parcel: Parcel) => void;
+  onLocation?: (loc: ParcelLocationUpdate) => void;
+  onConnectionChange?: (connected: boolean) => void;
+  // Kết quả mỗi lần đồng bộ snapshot REST (sau mỗi lần connect/reconnect)
+  onSync?: (result: SyncResult) => void;
 }
 
-// ---- Chế độ Tuần 4: WebSocket real-time (TrackingGateway) ----
-// Giữ 1 bản Parcel "nền" trong closure; mỗi event `parcel.status.updated` (chỉ là
-// bản vá: trạng thái mới + 1 mốc lịch sử) được ghép vào đó rồi đẩy lên UI.
-function subscribeToParcelWebSocket(
+// `initial` là snapshot REST vừa lấy được; giữ làm bản nền để ghép các bản vá realtime vào.
+// Trả về hàm cleanup (gọi khi unmount / đổi mã): gỡ mọi listener và đóng socket.
+export function subscribeToParcelRealtime(
   trackingCode: string,
-  onUpdate: (parcel: Parcel) => void,
-  onConnectionChange?: (connected: boolean) => void
+  initial: Parcel,
+  handlers: RealtimeHandlers
 ): () => void {
+  const { onParcel, onLocation, onConnectionChange, onSync } = handlers;
   let stopped = false;
-  let latest: Parcel | null = null;
+  let latest: Parcel = initial;
 
-  // Lấy snapshot REST rồi đồng bộ lại. Gọi khi (re)connect để bù các event bị rớt
-  // lúc mất mạng, và khi nhận bản vá mà chưa có bản nền.
-  const resync = () =>
-    trackParcel(trackingCode)
-      .then((fresh) => {
-        if (stopped || !fresh || !isSnapshotFresh(fresh, latest)) return;
+  // Lấy lại snapshot REST. Gọi sau MỖI lần connect (kể cả lần đầu, để không hở khoảng giữa
+  // snapshot ban đầu và lúc join room) nhằm bù event bị rớt lúc mất mạng.
+  const resync = async () => {
+    try {
+      const fresh = await trackParcel(trackingCode);
+      if (stopped) return;
+      if (fresh && isSnapshotFresh(fresh, latest)) {
         latest = fresh;
-        onUpdate(fresh);
-      })
-      .catch(() => {
-        /* giữ nguyên dữ liệu cũ trên UI nếu resync lỗi, không chặn luồng */
-      });
+        onParcel(fresh);
+      }
+      onSync?.({ ok: true, at: new Date() });
+    } catch (err) {
+      if (!stopped) onSync?.({ ok: false, message: err instanceof Error ? err.message : "Không đồng bộ được dữ liệu." });
+    }
+  };
 
   const handleStatus = (update: ParcelStatusUpdate) => {
-    if (stopped || update.trackingCode !== trackingCode) return;
-    if (!latest) {
+    if (stopped || update?.trackingCode !== trackingCode) return;
+    // Payload không đúng dạng bản vá { currentStatus, event } -> không ghép bừa, tải lại snapshot REST
+    if (!update.currentStatus || !update.event) {
       void resync();
       return;
     }
     latest = applyStatusUpdate(latest, update);
-    onUpdate(latest);
+    onParcel(latest);
+  };
+  const handleLocation = (loc: ParcelLocationUpdate) => {
+    if (!stopped && loc.trackingCode === trackingCode) onLocation?.(loc);
   };
 
   if (USE_MOCK) {
     onConnectionChange?.(true);
-    const leave = mockJoinRoom(trackingCode, handleStatus);
+    const leaveStatus = mockJoinRoom(trackingCode, handleStatus);
+    const leaveLocation = mockJoinLocation(trackingCode, handleLocation);
     void resync();
     return () => {
       stopped = true;
-      leave();
+      leaveStatus();
+      leaveLocation();
     };
   }
 
@@ -207,56 +197,28 @@ function subscribeToParcelWebSocket(
     timeout: 5000,
   });
 
-  // Mỗi lần connect (lần đầu HOẶC sau khi tự reconnect) phải join lại room —
-  // server không nhớ room của socket cũ — rồi resync snapshot.
+  // Mỗi lần connect phải join lại room (server không nhớ room của socket cũ) rồi resync.
+  // Các listener dưới đây được đăng ký đúng 1 lần cho socket này; reconnect của socket.io
+  // dùng lại chính socket + listener nên không bị nhân đôi.
   socket.on("connect", () => {
     onConnectionChange?.(true);
-    socket.emit("join:parcel", { trackingCode });
+    socket.emit("join:parcel", { trackingCode }, (ack?: { ok?: boolean; error?: string }) => {
+      if (!stopped && ack?.ok === false) {
+        onSync?.({ ok: false, message: `Máy chủ từ chối theo dõi đơn: ${ack.error ?? "không rõ lý do"}` });
+      }
+    });
     void resync();
   });
-
   socket.on("disconnect", () => onConnectionChange?.(false));
   socket.on("connect_error", () => onConnectionChange?.(false));
-
   socket.on("parcel.status.updated", handleStatus);
   socket.on("parcel.delivery.completed", handleStatus);
+  socket.on("parcel.location.updated", handleLocation);
 
   return () => {
     stopped = true;
-    socket.emit("leave:parcel", { trackingCode });
-    socket.disconnect();
-  };
-}
-
-// ---- Real-time subscription (entry point dùng chung cho TrackingPage) ----
-// Trả về hàm cleanup để gọi khi component unmount (đóng socket / dừng polling).
-export function subscribeToParcel(
-  trackingCode: string,
-  onUpdate: (parcel: Parcel) => void,
-  onConnectionChange?: (connected: boolean) => void
-): () => void {
-  if (REALTIME_MODE === "polling") {
-    return subscribeToParcelPolling(trackingCode, onUpdate, onConnectionChange);
-  }
-  return subscribeToParcelWebSocket(trackingCode, onUpdate, onConnectionChange);
-}
-
-// ---- Vị trí tài xế real-time ----
-// Server phát `parcel.location.updated` vào room của đơn (payload: ParcelLocationUpdate)
-// khi tài xế gửi `driver:location`. Hàm này mở socket riêng cho vị trí.
-export function subscribeToLocation(
-  trackingCode: string,
-  onLocation: (loc: ParcelLocationUpdate) => void
-): () => void {
-  if (USE_MOCK) return mockJoinLocation(trackingCode, onLocation);
-
-  const socket: Socket = io(SOCKET_URL, { transports: ["websocket"], reconnection: true });
-  socket.on("connect", () => socket.emit("join:parcel", { trackingCode }));
-  socket.on("parcel.location.updated", (loc: ParcelLocationUpdate) => {
-    if (loc.trackingCode === trackingCode) onLocation(loc);
-  });
-  return () => {
-    socket.emit("leave:parcel", { trackingCode });
+    if (socket.connected) socket.emit("leave:parcel", { trackingCode });
+    socket.off(); // gỡ toàn bộ listener trước khi đóng
     socket.disconnect();
   };
 }

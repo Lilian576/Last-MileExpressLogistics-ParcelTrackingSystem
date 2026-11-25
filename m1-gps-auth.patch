@@ -1,0 +1,206 @@
+diff --git a/Frontend/src/api/authApi.ts b/Frontend/src/api/authApi.ts
+index 6bdc6c4..4202e81 100644
+--- a/Frontend/src/api/authApi.ts
++++ b/Frontend/src/api/authApi.ts
+@@ -3,15 +3,14 @@ import { mockCustomerLogin, mockCustomerRegister } from "./mockBackend";
+ import { readError } from "./errors";
+ import { AuthSession, RegisterRequest } from "../types/auth";
+ 
+-// POST /auth/register — role luôn là "customer". Gửi kèm role để tương thích với
+-// backend hiện tại (RegisterDto còn bắt buộc role); khi M3 bỏ trường role khỏi
+-// DTO (sửa lỗi leo thang đặc quyền) thì ValidationPipe whitelist tự loại bỏ.
++// POST /auth/register — backend luôn tạo role "customer" (RegisterDto đã bỏ trường role,
++// M3 vá lỗi leo thang đặc quyền) nên frontend KHÔNG gửi role.
+ export async function register(req: RegisterRequest): Promise<AuthSession> {
+   if (USE_MOCK) return mockCustomerRegister(req);
+   const res = await fetch(`${API_BASE_URL}/auth/register`, {
+     method: "POST",
+     headers: { "Content-Type": "application/json" },
+-    body: JSON.stringify({ ...req, role: "customer" }),
++    body: JSON.stringify(req),
+   });
+   if (!res.ok) throw await readError(res, "Đăng ký thất bại, vui lòng thử lại.");
+   return res.json();
+diff --git a/Frontend/src/components/auth/LoginPage.tsx b/Frontend/src/components/auth/LoginPage.tsx
+index 8d08197..5e28aa7 100644
+--- a/Frontend/src/components/auth/LoginPage.tsx
++++ b/Frontend/src/components/auth/LoginPage.tsx
+@@ -26,8 +26,8 @@ export function LoginPage() {
+     setError(null);
+     try {
+       const session = await login(email.trim(), password);
+-      if (session.user.role === "shipper") {
+-        throw new Error("Đây là tài khoản tài xế, vui lòng đăng nhập ở trang Tài xế.");
++      if (session.user.role !== "customer") {
++        throw new Error("Đây là tài khoản nội bộ (tài xế/quản trị), vui lòng đăng nhập ở trang Tài xế.");
+       }
+       saveSession(session);
+       navigate(from, { replace: true });
+diff --git a/Frontend/src/components/auth/auth.test.tsx b/Frontend/src/components/auth/auth.test.tsx
+new file mode 100644
+index 0000000..486aec3
+--- /dev/null
++++ b/Frontend/src/components/auth/auth.test.tsx
+@@ -0,0 +1,56 @@
++import { describe, expect, it } from "vitest";
++import { render, screen } from "@testing-library/react";
++import userEvent from "@testing-library/user-event";
++import { MemoryRouter, Route, Routes } from "react-router-dom";
++import { ProtectedRoute } from "./ProtectedRoute";
++import { LoginPage } from "./LoginPage";
++import { RegisterPage } from "./RegisterPage";
++import { clearSession, getSession, saveSession } from "../../lib/session";
++
++function app(initial: string) {
++  return render(
++    <MemoryRouter initialEntries={[initial]}>
++      <Routes>
++        <Route path="/new" element={<ProtectedRoute><div>TRANG-BAO-VE</div></ProtectedRoute>} />
++        <Route path="/login" element={<LoginPage />} />
++        <Route path="/register" element={<RegisterPage />} />
++      </Routes>
++    </MemoryRouter>
++  );
++}
++
++describe("xác thực khách (mock)", () => {
++  it("chưa đăng nhập vào trang bảo vệ -> chuyển sang /login", async () => {
++    app("/new");
++    expect(screen.queryByText("TRANG-BAO-VE")).toBeNull();
++    expect(await screen.findByRole("button", { name: /Đăng nhập/ })).toBeInTheDocument();
++  });
++
++  it("đã đăng nhập thì vào được trang bảo vệ", () => {
++    saveSession({ accessToken: "t", user: { id: "u", fullName: "A", email: "a@b.vn", role: "customer" } });
++    app("/new");
++    expect(screen.getByText("TRANG-BAO-VE")).toBeInTheDocument();
++  });
++
++  it("đăng nhập sai mật khẩu báo lỗi và không lưu phiên", async () => {
++    const user = userEvent.setup();
++    app("/login");
++    await user.type(screen.getByLabelText("Email"), "khach@demo.vn");
++    await user.type(screen.getByLabelText("Mật khẩu"), "sai-mat-khau");
++    await user.click(screen.getByRole("button", { name: /Đăng nhập/ }));
++    expect(await screen.findByText(/không đúng/, {}, { timeout: 3000 })).toBeInTheDocument();
++    expect(getSession()).toBeNull();
++  });
++});
++
++describe("session", () => {
++  it("lưu, đọc, xoá; dữ liệu hỏng coi như chưa đăng nhập", () => {
++    const s = { accessToken: "t", user: { id: "u", fullName: "A", email: "a@b.vn", role: "customer" } };
++    saveSession(s);
++    expect(getSession()).toEqual(s);
++    clearSession();
++    expect(getSession()).toBeNull();
++    localStorage.setItem("lemail.customerSession", "{hỏng");
++    expect(getSession()).toBeNull();
++  });
++});
+diff --git a/Frontend/src/components/driver/DriverOrdersPage.tsx b/Frontend/src/components/driver/DriverOrdersPage.tsx
+index 955d0ce..03023d0 100644
+--- a/Frontend/src/components/driver/DriverOrdersPage.tsx
++++ b/Frontend/src/components/driver/DriverOrdersPage.tsx
+@@ -28,7 +28,7 @@ export function DriverOrdersPage() {
+   const [busyId, setBusyId] = useState<string | null>(null);
+   const [rowError, setRowError] = useState<Record<string, string>>({});
+   const [shareGps, setShareGps] = useState(true);
+-  const gps = useDriverGps(parcels, shareGps);
++  const gps = useDriverGps(parcels, shareGps, token);
+ 
+   const logout = useCallback(() => {
+     clearDriverSession();
+@@ -93,6 +93,7 @@ export function DriverOrdersPage() {
+           <span className="muted">
+             · {gps.source === "gps" ? "GPS thiết bị" : "GPS giả lập"}
+             {gps.lastSent && ` · gửi lúc ${gps.lastSent.toLocaleTimeString("vi-VN")}`}
++            {gps.rejected && <b role="alert"> · ⚠ server từ chối vị trí: {gps.rejected}</b>}
+           </span>
+         )}
+       </label>
+diff --git a/Frontend/src/lib/driverGps.token.test.ts b/Frontend/src/lib/driverGps.token.test.ts
+new file mode 100644
+index 0000000..763363b
+--- /dev/null
++++ b/Frontend/src/lib/driverGps.token.test.ts
+@@ -0,0 +1,26 @@
++import { describe, expect, it, vi } from "vitest";
++
++// Backend (fix/m2-backend) chỉ nhận `driver:location` khi handshake có auth.token = JWT tài xế
++describe("useDriverGps (backend thật)", () => {
++  it("mở socket kèm auth.token của tài xế và gửi đúng payload", async () => {
++    vi.resetModules();
++    vi.stubEnv("VITE_USE_MOCK", "false");
++    const emit = vi.fn();
++    const ioMock = vi.fn(() => ({ emit, disconnect: vi.fn() }));
++    vi.doMock("socket.io-client", () => ({ io: ioMock }));
++    const { renderHook } = await import("@testing-library/react");
++    const { useDriverGps } = await import("./driverGps");
++    const parcels = [{ id: "1", trackingCode: "PCL1", currentStatus: "IN_TRANSIT" }] as never;
++
++    const { unmount } = renderHook(() => useDriverGps(parcels, true, "jwt-tai-xe"));
++
++    const opts = (ioMock.mock.calls[0] as unknown[])[1] as { auth: { token: string } };
++    expect(opts.auth.token).toBe("jwt-tai-xe");
++    const [event, payload] = emit.mock.calls[0] as [string, Record<string, unknown>];
++    expect(event).toBe("driver:location");
++    expect(payload).toMatchObject({ trackingCode: "PCL1" });
++    expect(typeof payload.latitude).toBe("number");
++    unmount();
++    vi.unstubAllEnvs();
++  });
++});
+diff --git a/Frontend/src/lib/driverGps.ts b/Frontend/src/lib/driverGps.ts
+index 092c7ae..6b764a0 100644
+--- a/Frontend/src/lib/driverGps.ts
++++ b/Frontend/src/lib/driverGps.ts
+@@ -21,9 +21,12 @@ export function nextSimulated(prev: { lat: number; lng: number }, rnd: () => num
+ // Gửi `driver:location` { trackingCode, latitude, longitude } mỗi GPS_INTERVAL_MS cho từng
+ // đơn đang giao. Dùng GPS thật của trình duyệt (navigator.geolocation); nếu không có/bị từ
+ // chối thì giả lập đường đi để demo. Server phát lại thành `parcel.location.updated`.
+-export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean) {
++// `token` = JWT của tài xế: backend (nhánh fix/m2-backend) bắt buộc có trong handshake `auth.token`
++// và chỉ nhận vị trí của đơn đang giao cho đúng tài xế đó.
++export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean, token?: string) {
+   const [source, setSource] = useState<GpsSource>("simulated");
+   const [lastSent, setLastSent] = useState<Date | null>(null);
++  const [rejected, setRejected] = useState<string | null>(null); // lý do server từ chối vị trí
+   const codesRef = useRef<string[]>([]);
+   codesRef.current = (parcels ?? []).filter((p) => MOVING.includes(p.currentStatus)).map((p) => p.trackingCode);
+   const hasActive = codesRef.current.length > 0;
+@@ -32,7 +35,7 @@ export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean) {
+     if (!enabled || !hasActive) return;
+ 
+     let socket: Socket | null = null;
+-    if (!USE_MOCK) socket = io(SOCKET_URL, { transports: ["websocket"], reconnection: true });
++    if (!USE_MOCK) socket = io(SOCKET_URL, { transports: ["websocket"], reconnection: true, auth: { token } });
+ 
+     let fix: { lat: number; lng: number } | null = null;
+     let sim = { ...SIM_START };
+@@ -58,8 +61,13 @@ export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean) {
+         pos = sim;
+       }
+       for (const trackingCode of codesRef.current) {
+-        if (socket) socket.emit("driver:location", { trackingCode, latitude: pos.lat, longitude: pos.lng });
+-        else mockEmitLocation(trackingCode, pos.lat, pos.lng);
++        if (socket) {
++          socket.emit(
++            "driver:location",
++            { trackingCode, latitude: pos.lat, longitude: pos.lng },
++            (ack?: { ok?: boolean; error?: string }) => setRejected(ack?.ok === false ? (ack.error ?? "bị từ chối") : null)
++          );
++        } else mockEmitLocation(trackingCode, pos.lat, pos.lng);
+       }
+       setLastSent(new Date());
+     };
+@@ -71,7 +79,7 @@ export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean) {
+       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+       socket?.disconnect();
+     };
+-  }, [enabled, hasActive]);
++  }, [enabled, hasActive, token]);
+ 
+-  return { source, lastSent, active: enabled && hasActive };
++  return { source, lastSent, rejected, active: enabled && hasActive };
+ }

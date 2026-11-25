@@ -93,6 +93,7 @@ export function DriverOrdersPage() {
           <span className="muted">
             · {gps.source === "gps" ? "GPS thiết bị" : "GPS giả lập"}
             {gps.lastSent && ` · gửi lúc ${gps.lastSent.toLocaleTimeString("vi-VN")}`}
+            {!gps.connected && <b role="alert"> · ⚠ mất kết nối máy chủ, tạm dừng gửi vị trí</b>}
             {gps.rejected && <b role="alert"> · ⚠ server từ chối vị trí: {gps.rejected}</b>}
           </span>
         )}
