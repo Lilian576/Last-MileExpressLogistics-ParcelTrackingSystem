@@ -1,11 +1,9 @@
 # Wireframe UI — Customer Flow (M1, Tuần 1)
 
-> **Figma:** repo hiện **chưa có link Figma** nào (đã rà `README`, `TEAM.md`, `docs/`). M1 cần dán link file Figma
-> vào dòng dưới rồi kiểm tra quyền truy cập (Anyone with the link → View) trước khi nộp:
+> **Figma (UI/UX):** https://www.figma.com/design/90mU3C94U40Wr9jtnkdF7L/UI-UX?node-id=0-1&p=f&t=9VLay0BjnmHAsIeK-0
 >
-> `Figma: <CHƯA CÓ LINK — M1 bổ sung>`
->
-> Tài liệu này mô tả wireframe dạng văn bản/ASCII, đối chiếu với UI thật trong `Frontend/src/components/`.
+> Nhóm cần kiểm tra quyền truy cập Figma trước khi nộp (Anyone with the link → View).
+> Tài liệu này mô tả wireframe dạng văn bản/ASCII, đối chiếu với UI thật trong Frontend/src/components/.
 
 ## 1. Sơ đồ luồng (User Flow)
 
