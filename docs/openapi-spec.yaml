@@ -1,0 +1,997 @@
+openapi: 3.1.0
+info:
+  title: LeMail Parcel Tracking API
+  version: 2026-11-25-m3
+  description: >-
+    D01-D03 handoff against main 8b61f25. Paths describe current controllers. Missing object permissions and
+    planned B03 webhook are explicitly marked. New D01 DB columns remain nullable until B01 connects write
+    DTOs. See INTEGRATION.md.
+servers:
+  - url: http://localhost:3000
+    description: Local backend, override for deployment.
+security: []
+tags:
+  - name: Auth
+    description: Registration and JWT login
+  - name: Parcels
+    description: Pricing and internal parcel operations
+  - name: Public tracking
+    description: Tracking by public parcel code
+paths:
+  /auth/register:
+    post:
+      tags:
+        - Auth
+      operationId: registerCustomer
+      description: Always creates customer. A role in input is stripped by ValidationPipe and ignored by AuthService.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '201':
+          description: Customer and JWT
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '429':
+          $ref: '#/components/responses/Error429'
+      summary: Register a customer
+  /auth/login:
+    post:
+      tags:
+        - Auth
+      operationId: login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+              required:
+                - email
+                - password
+      responses:
+        '200':
+          description: JWT and user
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '429':
+          $ref: '#/components/responses/Error429'
+      summary: Sign in
+  /api/parcels/calculate-fee:
+    post:
+      tags:
+        - Parcels
+      operationId: calculateFee
+      description: >-
+        Existing endpoint. Main uses a TypeScript interface, so runtime range validation is still B01 work.
+        Base 15000 + 5000/kg + 1000/km Haversine, rounded to VND.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PricingRequest'
+      responses:
+        '201':
+          description: Calculated quote
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  fee:
+                    type: integer
+                  currency:
+                    const: VND
+                  details:
+                    type: object
+                    properties:
+                      weightKg:
+                        type: number
+                    required:
+                      - weightKg
+                required:
+                  - fee
+                  - currency
+                  - details
+        '429':
+          $ref: '#/components/responses/Error429'
+      summary: Calculate a VND shipping quote
+  /api/parcels:
+    post:
+      tags:
+        - Parcels
+      operationId: createParcel
+      security:
+        - bearerAuth: []
+      description: >-
+        Sender ID comes from JWT. Main returns calculated fee but does not yet persist feeVnd or coordinates.
+        B01 must connect D01 columns.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateParcelRequest'
+      responses:
+        '201':
+          description: Created parcel and fee
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/Parcel'
+                  - type: object
+                    properties:
+                      fee:
+                        type: integer
+                    required:
+                      - fee
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '429':
+          $ref: '#/components/responses/Error429'
+      summary: Create a parcel
+    get:
+      tags:
+        - Parcels
+      operationId: listParcels
+      description: Current main has no guard. B02 must restrict this internal list to authorized staff before release.
+      x-required-permissions:
+        - warehouse_staff
+        - admin
+      responses:
+        '200':
+          description: Internal parcel list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Parcel'
+        '429':
+          $ref: '#/components/responses/Error429'
+      summary: List internal parcels
+  /api/parcels/mine:
+    get:
+      tags:
+        - Parcels
+      operationId: listMyParcels
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Parcels filtered by JWT sender ID
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/Parcel'
+                    - type: object
+                      properties:
+                        statusHistory:
+                          type: array
+                          items:
+                            $ref: '#/components/schemas/ParcelStatusHistory'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '429':
+          $ref: '#/components/responses/Error429'
+      summary: List parcels sent by the caller
+  /api/parcels/assigned/mine:
+    get:
+      tags:
+        - Parcels
+      operationId: listAssignedParcels
+      security:
+        - bearerAuth: []
+      description: RolesGuard requires shipper. Active assignments only, terminal parcels excluded.
+      responses:
+        '200':
+          description: Assigned parcels
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Parcel'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '429':
+          $ref: '#/components/responses/Error429'
+      summary: List parcels assigned to the shipper
+  /api/parcels/{id}:
+    get:
+      tags:
+        - Parcels
+      operationId: getParcel
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            description: Internal parcel ID
+      description: >-
+        Current main has no guard or not-found exception. B02 must check owner/assignment/staff. Missing ID
+        currently returns null with 200.
+      x-required-permissions:
+        - owner
+        - assigned shipper
+        - warehouse_staff
+        - admin
+      responses:
+        '200':
+          description: Parcel or null
+          content:
+            application/json:
+              schema:
+                anyOf:
+                  - $ref: '#/components/schemas/Parcel'
+                  - type: 'null'
+        '429':
+          $ref: '#/components/responses/Error429'
+      summary: Read an internal parcel
+  /api/parcels/{id}/status:
+    patch:
+      tags:
+        - Parcels
+      operationId: updateParcelStatus
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            description: Internal parcel ID
+      description: >-
+        Actor comes from JWT. ASSIGN_COURIER is rejected here. Current DTO still accepts client flags; B01/B02
+        must read guards from DB and persist assignment effects. M3 allows admin DISPATCH_LAST_MILE at the
+        final hub.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateStatusRequest'
+      responses:
+        '200':
+          description: Updated parcel
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Parcel'
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '429':
+          $ref: '#/components/responses/Error429'
+      summary: Apply a lifecycle event
+  /api/parcels/{id}/assign-courier:
+    patch:
+      tags:
+        - Parcels
+      operationId: assignCourier
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            description: Internal parcel ID
+      description: >-
+        CREATE to PENDING_PICKUP using Serializable transaction. Admin is MVP dispatcher. No free courier
+        rejects transaction with 400. Serialization conflict is 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                pickupLat:
+                  type: number
+                pickupLng:
+                  type: number
+              required:
+                - pickupLat
+                - pickupLng
+      responses:
+        '200':
+          description: Parcel and assignment
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  parcel:
+                    $ref: '#/components/schemas/Parcel'
+                  assignmentResult:
+                    type: object
+                    properties:
+                      found:
+                        const: true
+                      courier:
+                        type: object
+                        properties:
+                          id:
+                            type: string
+                          fullName:
+                            type: string
+                          currentLatitude:
+                            oneOf:
+                              - type: string
+                                pattern: ^-?[0-9]+(.[0-9]+)?$
+                              - type: number
+                            description: Prisma Decimal is normally serialized as a JSON string.
+                          currentLongitude:
+                            oneOf:
+                              - type: string
+                                pattern: ^-?[0-9]+(.[0-9]+)?$
+                              - type: number
+                            description: Prisma Decimal is normally serialized as a JSON string.
+                        required:
+                          - id
+                          - fullName
+                      distanceKm:
+                        type: number
+                      assignment:
+                        $ref: '#/components/schemas/DeliveryAssignment'
+                    required:
+                      - found
+                      - courier
+                      - distanceKm
+                      - assignment
+                required:
+                  - parcel
+                  - assignmentResult
+        '400':
+          $ref: '#/components/responses/Error400'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
+        '429':
+          $ref: '#/components/responses/Error429'
+      summary: Assign the nearest pickup courier
+  /api/public/track/{code}:
+    get:
+      tags:
+        - Public tracking
+      operationId: trackParcel
+      parameters:
+        - name: code
+          in: path
+          required: true
+          schema:
+            type: string
+      description: >-
+        Current snapshot uses raw status and receiverName. Excludes phone/address and delivery proof. B02 owns
+        further minimization of internal notes/status.
+      responses:
+        '200':
+          description: Public timeline
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PublicTracking'
+        '404':
+          $ref: '#/components/responses/Error404'
+        '429':
+          $ref: '#/components/responses/Error429'
+      summary: Read a public tracking timeline
+webhooks:
+  parcelStatusUpdated:
+    post:
+      operationId: receiveParcelStatusWebhook
+      x-implementation-status: B03 planned, HTTP sender not implemented on main
+      description: >-
+        M2 handoff. Server POSTs to PARCEL_WEBHOOK_URL after DB commit. Stable eventId across retry.
+        HMAC-SHA256 over timestamp + "." + exact raw JSON body. Receiver rejects replay/outside 300s,
+        acknowledges with 2xx. Timeout/non-2xx logs delivery failure without rolling back parcel.
+      parameters:
+        - name: X-Webhook-Id
+          in: header
+          required: true
+          schema:
+            type: string
+        - name: X-Webhook-Timestamp
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: ^[0-9]+$
+        - name: X-Webhook-Signature
+          in: header
+          required: true
+          schema:
+            type: string
+            pattern: ^sha256=[0-9a-f]{64}$
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ParcelStatusWebhook'
+      responses:
+        '204':
+          description: Receiver accepted the event
+        '400':
+          description: Invalid or replayed event
+        '401':
+          description: Invalid signature
+      summary: Receive a signed status webhook
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Role:
+      type: string
+      enum:
+        - customer
+        - shipper
+        - warehouse_staff
+        - admin
+    ParcelStatus:
+      type: string
+      enum:
+        - CREATED
+        - PENDING_PICKUP
+        - PICKED_UP
+        - IN_TRANSIT
+        - AT_HUB
+        - OUT_FOR_DELIVERY
+        - DELIVERED
+        - DELIVERY_FAILED
+        - RETURNING
+        - RETURNED
+        - CANCELLED
+        - LOST
+    RegisterRequest:
+      type: object
+      properties:
+        fullName:
+          type: string
+          minLength: 1
+        email:
+          type: string
+          format: email
+        phone:
+          type: string
+          minLength: 1
+        password:
+          type: string
+          minLength: 6
+      required:
+        - fullName
+        - email
+        - phone
+        - password
+    AuthResponse:
+      type: object
+      properties:
+        accessToken:
+          type: string
+        user:
+          type: object
+          properties:
+            id:
+              type: string
+            fullName:
+              type: string
+            email:
+              type: string
+              format: email
+            role:
+              $ref: '#/components/schemas/Role'
+          required:
+            - id
+            - fullName
+            - email
+            - role
+      required:
+        - accessToken
+        - user
+    PricingRequest:
+      type: object
+      properties:
+        weightKg:
+          type: number
+        senderLat:
+          type: number
+        senderLng:
+          type: number
+        receiverLat:
+          type: number
+        receiverLng:
+          type: number
+      required:
+        - weightKg
+        - senderLat
+        - senderLng
+        - receiverLat
+        - receiverLng
+    CreateParcelRequest:
+      allOf:
+        - $ref: '#/components/schemas/PricingRequest'
+        - type: object
+          properties:
+            receiverName:
+              type: string
+              minLength: 1
+            receiverPhone:
+              type: string
+              minLength: 1
+            receiverAddress:
+              type: string
+              minLength: 1
+          required:
+            - receiverName
+            - receiverPhone
+            - receiverAddress
+    UpdateStatusRequest:
+      type: object
+      properties:
+        event:
+          type: string
+          enum:
+            - create_parcel
+            - assign_courier
+            - cancel_order
+            - confirm_pickup
+            - depart_to_hub
+            - arrive_at_hub
+            - dispatch_to_next_hub
+            - dispatch_last_mile
+            - sla_timeout
+            - confirm_delivery
+            - report_failed_delivery
+            - retry_delivery
+            - max_retries_reached
+            - confirm_return_to_sender
+        hasAvailableCourier:
+          type: boolean
+          deprecated: true
+          description: >-
+            Legacy main DTO. B02 must derive trusted guard data from DB instead of accepting this flag as
+            proof.
+        isAssignedCourier:
+          type: boolean
+          deprecated: true
+          description: >-
+            Legacy main DTO. B02 must derive trusted guard data from DB instead of accepting this flag as
+            proof.
+        isHubLocation:
+          type: boolean
+          deprecated: true
+          description: >-
+            Legacy main DTO. B02 must derive trusted guard data from DB instead of accepting this flag as
+            proof.
+        isFinalHub:
+          type: boolean
+          deprecated: true
+          description: >-
+            Legacy main DTO. B02 must derive trusted guard data from DB instead of accepting this flag as
+            proof.
+        hasDeliveryProof:
+          type: boolean
+          deprecated: true
+          description: >-
+            Legacy main DTO. B02 must derive trusted guard data from DB instead of accepting this flag as
+            proof.
+        hoursSinceLastUpdate:
+          type: number
+          deprecated: true
+          description: Legacy main DTO. Not trusted authorization or persisted evidence.
+        failedAttemptCount:
+          type: number
+          deprecated: true
+          description: Legacy main DTO. Not trusted authorization or persisted evidence.
+        maxRetryAttempts:
+          type: number
+          deprecated: true
+          description: Legacy main DTO. Not trusted authorization or persisted evidence.
+      required:
+        - event
+    Parcel:
+      type: object
+      properties:
+        id:
+          type: string
+        trackingCode:
+          type: string
+        senderId:
+          type: string
+        receiverName:
+          type: string
+        receiverPhone:
+          type: string
+        receiverAddress:
+          type: string
+        weightKg:
+          oneOf:
+            - type: string
+              pattern: ^-?[0-9]+(.[0-9]+)?$
+            - type: number
+          description: Prisma Decimal is normally serialized as a JSON string.
+        dimensions:
+          anyOf:
+            - type: string
+            - type: 'null'
+        codAmount:
+          anyOf:
+            - oneOf:
+                - type: string
+                  pattern: ^-?[0-9]+(.[0-9]+)?$
+                - type: number
+              description: Prisma Decimal is normally serialized as a JSON string.
+            - type: 'null'
+        currentStatus:
+          $ref: '#/components/schemas/ParcelStatus'
+        failedAttemptCount:
+          type: integer
+        originLocationId:
+          anyOf:
+            - type: string
+            - type: 'null'
+        destinationLocationId:
+          anyOf:
+            - type: string
+            - type: 'null'
+        currentLocationId:
+          anyOf:
+            - type: string
+            - type: 'null'
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        feeVnd:
+          type:
+            - integer
+            - 'null'
+          minimum: 0
+          description: D01 column, B01 still needs to write this at creation. Null means unknown legacy fee.
+        senderLat:
+          anyOf:
+            - oneOf:
+                - type: string
+                  pattern: ^-?[0-9]+(.[0-9]+)?$
+                - type: number
+              description: Prisma Decimal is normally serialized as a JSON string.
+            - type: 'null'
+        senderLng:
+          anyOf:
+            - oneOf:
+                - type: string
+                  pattern: ^-?[0-9]+(.[0-9]+)?$
+                - type: number
+              description: Prisma Decimal is normally serialized as a JSON string.
+            - type: 'null'
+        receiverLat:
+          anyOf:
+            - oneOf:
+                - type: string
+                  pattern: ^-?[0-9]+(.[0-9]+)?$
+                - type: number
+              description: Prisma Decimal is normally serialized as a JSON string.
+            - type: 'null'
+        receiverLng:
+          anyOf:
+            - oneOf:
+                - type: string
+                  pattern: ^-?[0-9]+(.[0-9]+)?$
+                - type: number
+              description: Prisma Decimal is normally serialized as a JSON string.
+            - type: 'null'
+        deliveryProof:
+          anyOf:
+            - type: string
+              description: Internal evidence reference. B01 validation and write pending. Never publish on tracking.
+            - type: 'null'
+        deliveredAt:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+      required:
+        - id
+        - trackingCode
+        - senderId
+        - receiverName
+        - receiverPhone
+        - receiverAddress
+        - weightKg
+        - currentStatus
+        - createdAt
+        - updatedAt
+    ParcelStatusHistory:
+      type: object
+      properties:
+        id:
+          type: string
+        parcelId:
+          type: string
+        status:
+          $ref: '#/components/schemas/ParcelStatus'
+        locationId:
+          anyOf:
+            - type: string
+            - type: 'null'
+        changedBy:
+          anyOf:
+            - type: string
+            - type: 'null'
+        note:
+          anyOf:
+            - type: string
+            - type: 'null'
+        createdAt:
+          type: string
+          format: date-time
+      required:
+        - id
+        - parcelId
+        - status
+        - createdAt
+    DeliveryAssignment:
+      type: object
+      properties:
+        id:
+          type: string
+        parcelId:
+          type: string
+        courierId:
+          type: string
+        assignmentType:
+          type: string
+          enum:
+            - pickup
+            - last_mile
+            - hub_transfer
+        status:
+          type: string
+          enum:
+            - assigned
+            - accepted
+            - in_progress
+            - completed
+            - failed
+            - cancelled
+        assignedAt:
+          type: string
+          format: date-time
+        completedAt:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        notes:
+          anyOf:
+            - type: string
+            - type: 'null'
+      required:
+        - id
+        - parcelId
+        - courierId
+        - assignmentType
+        - status
+        - assignedAt
+    PublicTracking:
+      type: object
+      properties:
+        trackingCode:
+          type: string
+        currentStatus:
+          $ref: '#/components/schemas/ParcelStatus'
+        receiverName:
+          type: string
+        history:
+          type: array
+          items:
+            type: object
+            properties:
+              status:
+                $ref: '#/components/schemas/ParcelStatus'
+              timestamp:
+                type: string
+                format: date-time
+              note:
+                type: string
+            required:
+              - status
+              - timestamp
+      required:
+        - trackingCode
+        - currentStatus
+        - receiverName
+        - history
+    ParcelStatusUpdated:
+      type: object
+      properties:
+        trackingCode:
+          type: string
+        currentStatus:
+          $ref: '#/components/schemas/ParcelStatus'
+        event:
+          type: object
+          properties:
+            status:
+              $ref: '#/components/schemas/ParcelStatus'
+            timestamp:
+              type: string
+              format: date-time
+            note:
+              type: string
+          required:
+            - status
+            - timestamp
+      required:
+        - trackingCode
+        - currentStatus
+        - event
+    ParcelLocationUpdated:
+      type: object
+      properties:
+        trackingCode:
+          type: string
+        latitude:
+          type: number
+          minimum: -90
+          maximum: 90
+        longitude:
+          type: number
+          minimum: -180
+          maximum: 180
+        timestamp:
+          type: string
+          format: date-time
+      required:
+        - trackingCode
+        - latitude
+        - longitude
+        - timestamp
+    ParcelStatusWebhook:
+      type: object
+      properties:
+        eventId:
+          type: string
+        type:
+          const: parcel.status.updated
+        occurredAt:
+          type: string
+          format: date-time
+        data:
+          $ref: '#/components/schemas/ParcelStatusUpdated'
+      required:
+        - eventId
+        - type
+        - occurredAt
+        - data
+    Error:
+      type: object
+      properties:
+        statusCode:
+          type: integer
+        message:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+        error:
+          type: string
+      required:
+        - statusCode
+        - message
+  responses:
+    Error400:
+      description: Invalid input or transition
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error401:
+      description: Authentication failed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error403:
+      description: Actor or role denied
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error404:
+      description: Parcel not found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error409:
+      description: Duplicate or concurrent write
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Error429:
+      description: HTTP quota exceeded
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+      headers:
+        Retry-After:
+          description: Seconds until quota reset
+          schema:
+            type: integer
+        X-RateLimit-Remaining:
+          schema:
+            type: integer
+x-socketio:
+  namespace: /
+  room: parcel:{trackingCode}
+  clientEvents:
+    join:parcel:
+      trackingCode: PCL123
+    leave:parcel:
+      trackingCode: PCL123
+    driver:location:
+      trackingCode: PCL123
+      latitude: 10.7292
+      longitude: 106.6935
+      token: <JWT>
+  serverEvents:
+    parcel.status.updated:
+      $ref: '#/components/schemas/ParcelStatusUpdated'
+    parcel.delivery.completed:
+      $ref: '#/components/schemas/ParcelStatusUpdated'
+    parcel.location.updated:
+      $ref: '#/components/schemas/ParcelLocationUpdated'
+  description: See INTEGRATION.md. Main does not yet authenticate/persist GPS; B02 required.

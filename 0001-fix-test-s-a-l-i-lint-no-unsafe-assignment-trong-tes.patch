@@ -1,0 +1,35 @@
+From f3b8a1689d7f828757b9f895cd1350d29ad1107f Mon Sep 17 00:00:00 2001
+From: dev <dev@example.com>
+Date: Tue, 3 Nov 2026 01:50:08 +0000
+Subject: [PATCH] =?UTF-8?q?fix(test):=20s=E1=BB=ADa=20l=E1=BB=97i=20lint?=
+ =?UTF-8?q?=20no-unsafe-assignment=20trong=20test=20findAssignedTo=20(l?=
+ =?UTF-8?q?=C3=A0m=20CI=20=C4=91=E1=BB=8F)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+---
+ backend/src/parcels/parcels.service.spec.ts | 7 ++++---
+ 1 file changed, 4 insertions(+), 3 deletions(-)
+
+diff --git a/backend/src/parcels/parcels.service.spec.ts b/backend/src/parcels/parcels.service.spec.ts
+index 995e22e..891b8f1 100644
+--- a/backend/src/parcels/parcels.service.spec.ts
++++ b/backend/src/parcels/parcels.service.spec.ts
+@@ -173,9 +173,10 @@ describe('ParcelsService - Pricing Engine', () => {
+       mockPrisma.deliveryAssignment.findMany.mockResolvedValue([{ parcel: p }, { parcel: p }]);
+       const list = await service.findAssignedTo('driver-1');
+       expect(list).toEqual([p]);
+-      expect(mockPrisma.deliveryAssignment.findMany).toHaveBeenCalledWith(
+-        expect.objectContaining({ where: expect.objectContaining({ courierId: 'driver-1' }) }),
+-      );
++      const [args] = mockPrisma.deliveryAssignment.findMany.mock.calls[0] as [
++        { where: { courierId: string } },
++      ];
++      expect(args.where.courierId).toBe('driver-1');
+     });
+   });
+ });
+-- 
+2.43.0
+

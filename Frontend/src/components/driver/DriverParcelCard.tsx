@@ -13,11 +13,11 @@ interface Props {
   parcel: DriverParcel;
   busy: boolean;
   error?: string;
-  onAction: (parcel: DriverParcel, action: ShipperAction, hasProof: boolean) => void;
+  onAction: (parcel: DriverParcel, action: ShipperAction, proofRef: string) => void;
 }
 
 export function DriverParcelCard({ parcel, busy, error, onAction }: Props) {
-  const [hasProof, setHasProof] = useState(false);
+  const [proofRef, setProofRef] = useState("");
   const actions = SHIPPER_ACTIONS[parcel.currentStatus] ?? [];
   const needsProof = actions.some((a) => a.needsProof);
   const finished = TERMINAL_STATUSES.includes(parcel.currentStatus);
@@ -40,8 +40,14 @@ export function DriverParcelCard({ parcel, busy, error, onAction }: Props) {
 
       {needsProof && (
         <label className="driver-proof">
-          <input type="checkbox" checked={hasProof} onChange={(e) => setHasProof(e.target.checked)} disabled={busy} />
-          Đã có bằng chứng giao hàng (ảnh / chữ ký người nhận)
+          Mã tham chiếu bằng chứng giao hàng
+          <input
+            type="text"
+            value={proofRef}
+            maxLength={200}
+            onChange={(event) => setProofRef(event.target.value)}
+            disabled={busy}
+          />
         </label>
       )}
 
@@ -51,8 +57,8 @@ export function DriverParcelCard({ parcel, busy, error, onAction }: Props) {
             <button
               key={a.event}
               className={`btn ${a.tone === "primary" ? "btn-primary" : "btn-danger"}`}
-              disabled={busy || (a.needsProof && !hasProof)}
-              onClick={() => onAction(parcel, a, hasProof)}
+              disabled={busy || (a.needsProof && !proofRef.trim())}
+              onClick={() => onAction(parcel, a, proofRef.trim())}
             >
               {busy ? "Đang cập nhật..." : a.label}
             </button>

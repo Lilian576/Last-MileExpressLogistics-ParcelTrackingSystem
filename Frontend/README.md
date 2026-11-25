@@ -1,213 +1,154 @@
-# LẹMail — Sender App (Customer Frontend)
+# CloudShip — Frontend (Sender / Driver / Ops)
 
-Frontend module do **M1 (Frontend/UI-UX Lead)** phụ trách, thuộc đồ án
-*Last-Mile Express Logistics & Parcel Tracking System* — môn Công nghệ phần
-mềm (502045), Nhóm 4 người. Xem phân công đầy đủ tại [`TEAM.md`](../TEAM.md).
+Frontend do **M1 (Frontend/UI-UX Lead)** phụ trách, thuộc đồ án *Last-Mile Express Logistics & Parcel Tracking System*
+(môn Công nghệ phần mềm 502045, nhóm 4 người — xem [`TEAM.md`](../TEAM.md)).
+React 19 + TypeScript + Vite, React Router v7, Socket.io-client, Leaflet (bản đồ OpenStreetMap).
 
-## Đã hoàn thành
+- Wireframe & luồng UI: [`docs/WIREFRAME.md`](../docs/WIREFRAME.md)
+- Contract tích hợp M2/M3: [`docs/INTEGRATION.md`](../docs/INTEGRATION.md)
 
-### Tuần 1 — Wireframe & luồng UI
-- Wireframe + user flow cho toàn bộ Customer flow: xem [`docs/WIREFRAME.md`](./docs/WIREFRAME.md).
-- Đối chiếu 1-1 với UI thật đã dựng trong `src/components/`.
+## 1. Chạy UI với backend thật (dùng cho nghiệm thu)
 
-### Tuần 2 — Customer UI kết nối API
-- **Wizard tạo đơn** 4 bước (`src/components/wizard/`): người gửi/nhận →
-  kiện hàng → xác nhận & tính phí (gọi `getQuote`) → xác nhận đặt đơn (gọi
-  `createParcel`) → hoàn tất.
-- **Xem danh sách đơn** (`src/components/orders/OrdersPage.tsx`, route
-  `/orders`): liệt kê các đơn đã tạo trên trình duyệt hiện tại (mã, người
-  nhận, trạng thái, phí, thời gian tạo), bấm vào 1 dòng để xem chi tiết/tracking.
-- **Tra cứu công khai** (`src/components/tracking/`, route `/tracking/:code`):
-  xem lịch sử trạng thái + cập nhật real-time qua WebSocket (mock).
-
-### Tuần 3 — Polling tracking (state machine end-to-end)
-- `subscribeToParcel()` trong `src/api/parcelApi.ts` được tách thành 2 chiến lược:
-  `subscribeToParcelPolling()` (dùng REST, gọi `trackParcel()` lặp lại mỗi
-  `POLLING_INTERVAL_MS`, tự dừng khi trạng thái về trạng thái cuối) và
-  `subscribeToParcelWebSocket()` (dùng cho Tuần 4). Chọn qua cờ
-  `REALTIME_MODE: "polling" | "websocket"`.
-
-### Tuần 4 — WebSocket client thật + reconnect
-- `REALTIME_MODE` chuyển sang `"websocket"` — `TrackingPage` nhận cập nhật
-  qua Socket.io thay vì polling.
-- `subscribeToParcelWebSocket()`: bật `reconnection: true` (tự kết nối lại
-  vô hạn, delay tăng dần tới 5s); mỗi lần `connect` (kể cả sau khi mất mạng
-  rồi có lại) đều `emit("join:parcel")` lại **và** gọi `trackParcel()` để
-  resync snapshot mới nhất — tránh bỏ sót event nếu rớt mạng đúng lúc backend
-  emit.
-- Nút demo "🔌 Giả lập mất mạng 3s" trong `TrackingPage` (chỉ hiện khi
-  `USE_MOCK=true`) để demo hành vi reconnect ngay cả khi chưa nối được
-  backend WebSocket thật.
-
-### Tuần 2–3 — Driver UI (tài xế)
-- `/driver/login` (`DriverLoginPage`): đăng nhập bằng `POST /auth/login`, chỉ nhận
-  tài khoản role `shipper`; token lưu ở `lib/driverSession.ts`.
-- `/driver` (`DriverOrdersPage` + `DriverParcelCard`): danh sách đơn được giao
-  (`GET /api/parcels/assigned/mine`), tự làm mới mỗi 15s + nút "Làm mới".
-- **Nút cập nhật trạng thái** chỉ hiện đúng các bước mà actor `shipper` được phép
-  theo `transition-table.ts` (xem `SHIPPER_ACTIONS` trong `types/driver.ts`):
-  `PENDING_PICKUP→PICKED_UP`, `PICKED_UP→IN_TRANSIT`,
-  `OUT_FOR_DELIVERY→DELIVERED | DELIVERY_FAILED`, `RETURNING→RETURNED`.
-  "Giao thành công" bị khóa tới khi tick "đã có bằng chứng giao hàng" (guard
-  `hasDeliveryProof`). Các bước còn lại (kho/điều phối/hệ thống) hiển thị lý do chờ.
-- Gọi `PATCH /api/parcels/:id/status` — mọi luật vẫn do `StateMachineService`
-  kiểm tra lại ở backend; lỗi 400/403 hiện ngay trên thẻ đơn, 401 → về trang login.
-
-### Tuần 4 — Hợp đồng WebSocket (M1 ↔ M2)
-| Chiều | Event | Payload |
-|---|---|---|
-| client → server | `join:parcel` / `leave:parcel` | `{ trackingCode }` (server ack `{ ok, trackingCode }`) |
-| server → room `parcel:<trackingCode>` | `parcel.status.updated` | `{ trackingCode, currentStatus, event: { status, timestamp, note? } }` |
-| server → room | `parcel.delivery.completed` | cùng payload, chỉ khi `DELIVERED` |
-
-Payload là **bản vá** (trạng thái mới + 1 mốc lịch sử), không phải cả `Parcel`:
-client giữ bản nền từ REST và ghép vào (`lib/parcelUpdates.ts`), nên backend
-không phải dựng lại `Parcel` của Frontend. Sau mỗi (re)connect client join lại
-room + resync REST; snapshot cũ hơn dữ liệu đang có sẽ bị bỏ qua (không lùi trạng thái).
-
-Backend phát event trong `ParcelsService.updateStatus()` **sau khi** DB lưu thành
-công (cùng transaction ghi `parcel_status_history`).
-
-### Demo 2 màn hình song song (chế độ mock, không cần backend)
-`mockBackend` lưu dữ liệu vào `localStorage` và phát event qua `BroadcastChannel`,
-nên 2 tab cùng trình duyệt dùng chung dữ liệu:
-1. Tab A: đăng ký/đăng nhập, tạo đơn ở `/new`, mở `/tracking/<mã>`; bấm nút demo `→ PENDING_PICKUP`
-   (đóng vai điều phối gán tài xế).
-2. Tab B: `/driver/login` (`driver@demo.vn` / `123456`) → bấm "Đã lấy hàng" …
-   → tab A cập nhật ngay, không reload.
-3. Các bước của kho (`→ AT_HUB`, `→ OUT_FOR_DELIVERY`) bấm bằng nút demo ở tab A.
-`MOCK_AUTO_PROGRESS` (trong `mockBackend.ts`) mặc định **tắt** để tài xế có việc để làm;
-đặt `true` nếu muốn đơn tự chạy tới DELIVERED khi demo riêng màn hình khách.
-
-Chạy với backend thật: `VITE_USE_MOCK=false npm run dev` (xem `.env.example`).
-
-### ⚠️ Đối chiếu với code backend thật (đọc trực tiếp từ repo `backend/src`)
-
-Sau khi đọc code thật của M2/M3, phát hiện vài điểm CẦN THỐNG NHẤT LẠI trước
-khi tắt `USE_MOCK`:
-
-1. **Enum trạng thái đã được sửa khớp 100%** với
-   `backend/prisma/schema.prisma` (enum `ParcelStatus`) và
-   `backend/src/state-machine/transition-table.ts` — 12 trạng thái:
-   `CREATED, PENDING_PICKUP, PICKED_UP, IN_TRANSIT, AT_HUB,
-   OUT_FOR_DELIVERY, DELIVERED, DELIVERY_FAILED, RETURNING, RETURNED,
-   CANCELLED, LOST` (trước đó `types/parcel.ts` dùng enum tự đoán, đã lệch —
-   nay đã đồng bộ).
-2. ~~Gateway chỉ có ping/pong~~ → **đã bổ sung**: `join:parcel`, `leave:parcel`
-   và `emitStatusUpdated()` (gọi từ `ParcelsService.updateStatus`); có test
-   WebSocket thật ở `backend/src/tracking/tracking.gateway.spec.ts`. M4: test
-   e2e cũ `tracking.e2e-spec.ts` đang emit `joinRoom` — cần đổi thành `join:parcel`.
-3. **`POST /api/parcels` hiện dùng DTO tối giản** (`senderName, senderLat,
-   senderLng, receiverName, receiverLat, receiverLng, weightKg` — tính khoảng
-   cách bằng công thức Haversine), khác với model `Parcel` đầy đủ trong
-   `schema.prisma` (có `receiverPhone`, `receiverAddress` dạng chuỗi,
-   `dimensions`, `codAmount`, và `senderId` lấy từ user đăng nhập chứ không
-   phải nhập tay). `ParcelsService` hiện cũng đang lưu **in-memory**, chưa
-   nối Prisma. → Đây là điểm quan trọng nhất cần họp lại giữa M1 ↔ M2 ↔ M3
-   trước khi tích hợp thật, vì 2 phía đang thiết kế request/response khác
-   nhau khá nhiều.
-4. **`POST /api/parcels` yêu cầu JWT** (`@UseGuards(JwtAuthGuard)`) — nghĩa
-   là sender-app cần có **màn hình đăng nhập** và đính kèm
-   `Authorization: Bearer <token>` trước khi gọi tạo đơn. Hiện tại UI M1
-   chưa có bước đăng nhập nào — cần bổ sung trước khi tắt mock.
-5. `GET /api/parcels/:id` hiện tra theo **id số** (`Number(id)`), không phải
-   theo `trackingCode` — cần thống nhất lại route tra cứu công khai theo
-   `trackingCode` (như M1 đang thiết kế) để không lộ ID tuần tự.
-
-**Khuyến nghị:** giữ `USE_MOCK = true` để tiếp tục demo UI mượt, đồng thời
-đem đúng 5 điểm trên vào buổi họp M1↔M2↔M3 tiếp theo để chốt lại contract
-trước khi nối thật.
-
-## Cấu trúc thư mục
-
-```
-src/
-  api/
-    parcelApi.ts     # Lớp gọi API — cờ USE_MOCK để chuyển mock ↔ backend thật
-    mockBackend.ts   # Backend giả lập (localStorage + BroadcastChannel), dev UI độc lập
-    driverApi.ts     # Login / danh sách đơn / cập nhật trạng thái của tài xế
-    errors.ts        # AuthExpiredError (401)
-  components/
-    wizard/          # 4 bước tạo đơn
-    orders/          # Danh sách đơn của tôi
-    driver/          # Driver UI: login + danh sách đơn + nút cập nhật
-    tracking/         # Trang tra cứu + timeline
-    shared/           # Field.tsx (input wrapper dùng chung)
-  lib/
-    myOrders.ts      # Lưu trackingCode đã tạo vào localStorage (tạm, chờ Auth)
-    driverSession.ts # Lưu JWT tài xế
-    parcelUpdates.ts # Ghép bản vá realtime vào Parcel
-  types/
-    parcel.ts        # Types + STATUS_LABEL + state machine (VALID_TRANSITIONS)
-    driver.ts        # Types tài xế + SHIPPER_ACTIONS (bước shipper được phép)
-docs/
-  WIREFRAME.md       # Đặc tả wireframe/luồng UI (deliverable Tuần 1)
-```
-
-## Cách chuyển từ mock sang backend thật
-
-Đổi bằng biến môi trường (`.env.local`, xem `.env.example`) hoặc 3 hằng số
-trong `src/api/parcelApi.ts`:
-
-```ts
-export const USE_MOCK = false; // đổi true -> false
-export const API_BASE_URL = "https://<domain-backend-thật>";
-export const SOCKET_URL = "https://<domain-backend-thật>";
-```
-
-Các endpoint UI đang mong đợi từ backend (đối chiếu với M2/M3):
-
-| Hành động        | Method & Path (frontend đang gọi) | Method & Path THẬT trong backend hiện tại | Ghi chú |
-|---|---|---|---|
-| Tính phí ship     | `POST /api/parcels/quote`         | `POST /api/parcels/calculate-fee` (DTO khác: lat/lng thay vì province) | Cần thống nhất lại request/response |
-| Tạo đơn           | `POST /api/parcels`               | `POST /api/parcels` (đúng path, khác DTO + cần JWT) | Backend yêu cầu login trước |
-| Tra cứu công khai | `GET /api/public/track/:code`     | Đã có (`PublicTrackingController`) | Chỉ trả trackingCode, trạng thái, tên người nhận, lịch sử — không lộ SĐT/địa chỉ; mã không tồn tại → 404 |
-| Danh sách đơn     | `GET /api/parcels/mine` (+ JWT)   | Chưa có | Cần AuthModule (M3) + route mới từ M2 |
-| Realtime tracking | WebSocket `join:parcel` / event `parcel.status.updated`, `parcel.delivery.completed` | Đã có (xem mục Hợp đồng WebSocket) | Test tích hợp `backend/src/parcels/parcels.realtime.spec.ts` chạy cả chuỗi: snapshot REST → join room → tài xế PATCH status → nhận event |
-| Driver: đăng nhập | `POST /auth/login` | Đúng (không có prefix `/api`) | |
-| Driver: đơn được giao | `GET /api/parcels/assigned/mine` (+ JWT, role shipper) | Đã thêm | Đơn xuất hiện khi điều phối gọi `PATCH /api/parcels/:id/assign-courier` (tạo `delivery_assignments` status=assigned) |
-| Driver: cập nhật trạng thái | `PATCH /api/parcels/:id/status` | Đúng | Backend nay ghi thêm `parcel_status_history` |
-
-> Xem chi tiết đầy đủ ở mục "⚠️ Đối chiếu với code backend thật" phía trên —
-> đây là danh sách việc cần chốt lại giữa M1 ↔ M2 ↔ M3 trước khi tắt mock.
-
-## Chạy dự án
+**Backend** (thư mục `backend`, cần PostgreSQL — xem `backend/.env.example`):
 
 ```bash
-npm install
-npm run dev      # http://localhost:5173
-npm run build    # build production (tsc -b && vite build)
-npm run lint      # oxlint
+cd backend
+npm ci
+# .env: DATABASE_URL, JWT_SECRET, DEMO_SEED_PASSWORD (>= 12 ký tự, chỉ dùng cho DB phát triển)
+npx prisma migrate deploy
+npx prisma db seed        # tạo admin@example.test, shipper1@example.test, shipper2@example.test và 2 hub
+npm run start:dev         # http://localhost:3000
 ```
 
-## Tech stack
+**Frontend**:
 
-React 19 + TypeScript + Vite, React Router v7, Socket.io-client (cho realtime
-tracking thật ở Tuần 4).
+```bash
+cd Frontend
+npm ci
+npm run dev               # http://localhost:5173 — mặc định gọi backend thật tại http://localhost:3000
+```
 
+Tài khoản: khách tự đăng ký ở `/register`; `admin@example.test`, `shipper1@example.test`, `shipper2@example.test` có mật khẩu
+`DEMO_SEED_PASSWORD`. **Seed hiện chưa có tài khoản `warehouse_staff`** (xem mục 6).
 
-## Cập nhật theo báo cáo đánh giá giảng viên (M1)
+## 2. Chạy UI ở chế độ mock (chỉ để dev giao diện, KHÔNG dùng để nghiệm thu)
 
-**Chạy với backend thật (mặc định):** `cd backend && npm run start:dev` rồi `cd Frontend && npm run dev`.
-Muốn chạy không cần backend: `VITE_USE_MOCK=true npm run dev` (xem `.env.example`).
+```bash
+cd Frontend
+VITE_USE_MOCK=true npm run dev
+```
 
-Luồng demo dữ liệu thật: **đăng ký → đăng nhập → tạo đơn → xem "Đơn của tôi" → theo dõi real-time**.
+Mock lưu dữ liệu trong `localStorage` và phát event qua `BroadcastChannel` nên 2 tab cùng trình duyệt dùng chung dữ liệu
+(tab A: khách tạo đơn, dùng nút demo `→ PENDING_PICKUP`; tab B: `/driver/login` với `driver@demo.vn` / `123456`).
+Mock **không** hỗ trợ màn hình vận hành `/ops` — màn này chỉ chạy với backend thật.
 
-| Hạng mục | Thay đổi |
-|---|---|
-| Đăng ký / đăng nhập khách | `components/auth/{LoginPage,RegisterPage,ProtectedRoute}.tsx`, `api/authApi.ts`, `lib/session.ts`; `/new` và `/orders` yêu cầu đăng nhập, 401 → về `/login` |
-| Tạo đơn thật | `api/contract.ts` ánh xạ form → `CreateParcelDto` (tỉnh → toạ độ ở `lib/geo.ts`), gửi `Authorization: Bearer` |
-| Tính phí | `POST /api/parcels/calculate-fee`, breakdown cộng khớp số backend trả về |
-| Đơn của tôi | `GET /api/parcels/mine` (JWT); bỏ phụ thuộc `myOrders.ts` (chỉ còn dùng cho mock) |
-| Vị trí tài xế | Driver app phát `driver:location` mỗi 4s (GPS thiết bị hoặc giả lập); trang tracking nhận `parcel.location.updated` và vẽ bản đồ Leaflet/OSM |
-| Dọn repo | Xóa thư mục `src/` trùng ở gốc |
-| Test | Vitest + Testing Library: `parcelUpdates`, `contract`, `Wizard`, `driverGps` (`npm test`) |
+### Biến môi trường (`.env.local`, xem `.env.example`)
 
-### Hợp đồng bổ sung với backend (cần M2 xác nhận)
-| Chiều | Event / API | Payload |
+| Biến | Mặc định | Ý nghĩa |
 |---|---|---|
-| client → server | `driver:location` | `{ trackingCode, latitude, longitude }` |
-| server → room | `parcel.location.updated` | `{ trackingCode, latitude, longitude, timestamp }` |
-| REST | `GET /api/parcels/mine` (JWT) | `Parcel[]` kèm `statusHistory` |
+| `VITE_USE_MOCK` | `false` | `true` = dùng mock thay backend |
+| `VITE_API_BASE_URL` | `http://localhost:3000` | URL REST của backend |
+| `VITE_SOCKET_URL` | = `VITE_API_BASE_URL` | URL Socket.io |
 
-Backend đã thêm bản tối thiểu của hai mục này (`parcels.controller.ts`, `tracking.gateway.ts`); phí (`feeVnd`) chưa lưu DB nên "Đơn của tôi" ẩn phí cho tới khi M2 thêm cột.
+## 3. Màn hình, route và quyền
+
+| Route | Vai trò (JWT `role`) | Chức năng |
+|---|---|---|
+| `/login`, `/register` | khách (`customer`) | Đăng nhập / đăng ký (tài khoản nội bộ bị từ chối ở trang này) |
+| `/new` | `customer` | Wizard 4 bước: thông tin → kiện hàng → **báo giá + phí** (`calculate-fee`) → đặt đơn |
+| `/orders` | `customer` | Đơn của tôi, tải lại từ server (`GET /api/parcels/mine`) |
+| `/tracking`, `/tracking/:code` | công khai | Tra cứu + timeline + bản đồ tài xế, real-time |
+| `/driver/login`, `/driver` | `shipper` | Đơn được giao; chỉ hiện nút hợp lệ với trạng thái; phát GPS cho khách |
+| `/ops/login`, `/ops` | `admin`, `warehouse_staff` | Tìm/lọc đơn, gán tài xế, tiếp nhận tại hub, điều phối |
+
+Phiên đăng nhập của 3 nhóm lưu ở 3 key `localStorage` riêng, nên tải lại trang vẫn giữ phiên và dữ liệu luôn lấy lại từ server.
+
+### Thao tác theo trạng thái (bám `backend/src/state-machine/transition-table.ts`)
+
+| Trạng thái | Ai thao tác | Event |
+|---|---|---|
+| `CREATED` | `admin` | gán tài xế gần nhất (`PATCH /api/parcels/:id/assign-courier`, cần toạ độ điểm lấy hàng) |
+| `PENDING_PICKUP` | `shipper` | `confirm_pickup` |
+| `PICKED_UP` | `shipper` | `depart_to_hub` |
+| `IN_TRANSIT` | `warehouse_staff` | `arrive_at_hub` (`isHubLocation: true`) |
+| `AT_HUB` | `warehouse_staff` | `dispatch_to_next_hub` (`isFinalHub: false`) |
+| `AT_HUB` → `OUT_FOR_DELIVERY` | `admin` (kiêm điều phối, theo D01) | `dispatch_last_mile` (`isFinalHub: true`) — **cần M3 thêm `admin` vào `allowedActors`**, xem mục 6 |
+| `OUT_FOR_DELIVERY` | `shipper` | `confirm_delivery` (cần `hasDeliveryProof`) / `report_failed_delivery` |
+| `RETURNING` | `shipper` | `confirm_return_to_sender` |
+
+## 4. Contract API đã đối chiếu với code backend
+
+| Hành động | Endpoint | Auth |
+|---|---|---|
+| Đăng ký / đăng nhập | `POST /auth/register`, `POST /auth/login` | — |
+| Tính phí | `POST /api/parcels/calculate-fee` → `{ fee, currency, details }` | — |
+| Tạo đơn | `POST /api/parcels` (`CreateParcelDto`: người nhận, `weightKg`, 4 toạ độ) | JWT |
+| Đơn của tôi | `GET /api/parcels/mine` | JWT |
+| Tra cứu công khai | `GET /api/public/track/:code` (404 = mã không tồn tại) | — |
+| Đơn của tài xế | `GET /api/parcels/assigned/mine` | JWT + `shipper` |
+| Cập nhật trạng thái | `PATCH /api/parcels/:id/status` `{ event, ...guard }` | JWT |
+| Gán tài xế | `PATCH /api/parcels/:id/assign-courier` `{ pickupLat, pickupLng }` | JWT |
+| Danh sách đơn (vận hành) | `GET /api/parcels` | hiện **không yêu cầu** JWT (xem mục 6) |
+
+### WebSocket (Socket.io, `TrackingGateway`)
+
+| Chiều | Event | Payload |
+|---|---|---|
+| client → server | `join:parcel` / `leave:parcel` | `{ trackingCode }`, ack `{ ok, error? }` |
+| server → room `parcel:<code>` | `parcel.status.updated`, `parcel.delivery.completed` | `{ trackingCode, currentStatus, event: { status, timestamp, note? } }` |
+| client (tài xế) → server | `driver:location` | `{ trackingCode, latitude, longitude }` (handshake `auth.token` = JWT) |
+| server → room | `parcel.location.updated` | `{ trackingCode, latitude, longitude, timestamp }` |
+
+Hành vi client (`subscribeToParcelRealtime` trong `src/api/parcelApi.ts`):
+
+- **Một socket duy nhất** cho mỗi trang tracking (trạng thái + vị trí); cleanup gỡ toàn bộ listener và đóng socket; cờ chống race xử lý
+  StrictMode/đổi mã nên không rò rỉ socket.
+- Mỗi lần `connect` (kể cả reconnect, delay tăng dần tới 5s): `join:parcel` lại **và** tải lại snapshot REST để bù event bị rớt;
+  snapshot cũ hơn dữ liệu đang có bị bỏ qua (không lùi trạng thái).
+- Payload trạng thái sai dạng → không ghép bừa mà tải lại snapshot REST.
+- UI phân biệt rõ: *mã không tồn tại* (404), *lỗi API / không kết nối* (có nút Thử lại), *mất kết nối real-time*
+  (cảnh báo + giờ đồng bộ cuối + giữ vị trí gần nhất đã nhận trong phiên).
+- Tài xế: tạm dừng gửi GPS khi socket mất kết nối và báo rõ; nhãn "GPS thiết bị" / "GPS giả lập" hiển thị ở màn hình tài xế.
+
+## 5. Kiểm tra
+
+```bash
+cd Frontend
+npm run lint     # oxlint
+npm test         # vitest (jsdom, chạy với mock, không cần backend)
+npm run build    # tsc -b && vite build
+```
+
+CI (`.github/workflows/ci.yml`) chạy đúng 3 lệnh trên với Node 22.
+
+## 6. Phần bị chặn / phụ thuộc module khác
+
+| # | Vấn đề | Phụ thuộc |
+|---|---|---|
+| 1 | `dispatch_last_mile` trong `transition-table.ts` hiện chỉ cho actor `dispatcher` (enum `Role` không có). UI đã đặt nút cho `admin` theo D01 nên **backend trả 403 cho tới khi M3 thêm `admin` vào `allowedActors`**; sau đó không cần sửa UI. | M3 |
+| 2 | Seed không có tài khoản `warehouse_staff` → chưa thể demo tiếp nhận tại hub trên DB mới. | M3 |
+| 3 | Backend không lưu / không trả vị trí GPS gần nhất; `parcel.location.updated` không có trường nguồn (thật/giả lập) → khách chỉ thấy vị trí nhận được trong phiên và không phân biệt được nguồn. | M2 |
+| 4 | `assignCourier` không emit `parcel.status.updated` → trang tracking của khách không tự cập nhật khi đơn chuyển `CREATED → PENDING_PICKUP`. | M2 |
+| 5 | Trên `main`, `GET /api/parcels` (gồm SĐT/địa chỉ) chưa yêu cầu JWT/role; nhánh `fix/m2-backend` đã giới hạn cho `admin`/`warehouse_staff`. UI luôn gửi Bearer nên chạy được với cả hai. | M2 (merge B02) |
+| 6 | Các cờ guard (`isAssignedCourier`, `isHubLocation`, `isFinalHub`, `hasDeliveryProof`) do client gửi và backend tin theo; `INTEGRATION.md` yêu cầu lấy từ DB. `driver:location` trên `main` chưa xác thực JWT (đã có ở `fix/m2-backend`; UI đã gửi `auth.token`). | M2/M3 |
+| 7 | `docs/INTEGRATION.md` mô tả payload `parcel.status.updated` là `{ trackingCode, status, updatedAt }` (nhãn rút gọn), còn code gateway phát `{ trackingCode, currentStatus, event }`. Frontend bám code; cần M2/M3 chốt bản nào là chuẩn. | M2/M3 |
+| 8 | Phí (`fee`) không lưu DB → "Đơn của tôi" ẩn phí; địa chỉ/toạ độ người gửi không được lưu. | M2 |
+| 9 | Chưa có link Figma trong repo. | M1 bổ sung (xem `docs/WIREFRAME.md`) |
+| 11 | Xác nhận giao hàng vẫn là checkbox → cờ `hasDeliveryProof`; backend chưa có trường dữ liệu bằng chứng (ảnh/chữ ký). Chờ contract D01. | M3 |
+| 10 | Chưa chạy E2E với backend thật trong môi trường CI/sandbox (cần PostgreSQL); `npm test` dùng mock fetch/socket. | M4 |
+
+## 6b. Cấu trúc thư mục
+
+```
+Frontend/
+  src/
+    api/          parcelApi (REST + realtime), driverApi, opsApi, authApi, contract (ánh xạ DTO), errors, mockBackend
+    components/   wizard/ orders/ tracking/ driver/ ops/ auth/ shared/
+    lib/          session, driverSession, opsSession, driverGps, geo, parcelUpdates, myOrders (chỉ cho mock)
+    types/        parcel, driver, ops, auth
+    test/         setup
+  public/favicon.svg
+```
+
+Không có thư mục `src/` ở gốc repo (bản sao đã bị xóa) — mọi mã nguồn Frontend nằm trong `Frontend/src/`.
+Đã xóa các asset không còn được tham chiếu: `src/assets/{hero.png,react.svg,vite.svg}`, `public/icons.svg`.

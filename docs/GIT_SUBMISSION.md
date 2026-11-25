@@ -1,56 +1,89 @@
-# Đẩy thay đổi lên GitHub và nộp bằng chứng
+# Hồ sơ bàn giao M3 cuối kỳ
 
-Repo: https://github.com/Lilian576/Last-MileExpressLogistics-ParcelTrackingSystem
+Bản ngày 25/11/2026 của ThaoVy26, theo kế hoạch D01–D03. Mục tiêu bản bàn giao là chuẩn bị dữ liệu, quyền state machine và tài liệu để M2/M1/M4 tích hợp ứng viên nộp.
 
-## 1. Kiểm tra và commit
+## 1. Phiên bản và nguồn truy vết
 
-Chạy trong PowerShell tại thư mục gốc repo. Các thay đổi package.json, package-lock.json, .env.example và weather-surcharge đã có trước lần sửa này; danh sách git add bên dưới chỉ lấy các file thuộc yêu cầu SRS/UML/rate limiting/interface.
+| Thành phần | Mốc |
+|---|---|
+| Main dùng để thực hiện và kiểm thử M3 | 8b61f2584094c8dbb7292005108e54023d90d10a |
+| Develop được đối chiếu | 5f2d7b030ec43361f683d17a1fc373cd598deecc |
+| Nhánh sửa backend M2 được tham chiếu | ec57bc3269756a8a23f445ce047c261f122470a3 |
+| Bản bàn giao M3 | feature/m3-final-revision, commit có tiêu đề “sửa lại” |
+| Bản release cuối | Chờ R02 sau khi Q03 hoàn tất |
 
-```powershell
-git status --short
-git switch -c feature/m3-srs-uml-rate-limit
-git add -- backend/src/app.module.ts backend/src/common/rate-limit.middleware.ts backend/src/common/rate-limit.middleware.spec.ts backend/src/state-machine/transition-notifier.ts docs/SRS.md docs/INTEGRATION.md docs/GIT_SUBMISSION.md docs/uml docs/issues
-git diff --cached --stat
-git diff --cached --check
-git commit -m "feat: add API rate limiting and week 1 requirements"
-git push -u origin feature/m3-srs-uml-rate-limit
-```
+SHA chính xác của bản đang xem lấy bằng git rev-parse HEAD. Mỗi file trong cây commit, gồm nguồn/PDF UML và OpenAPI, thuộc cùng bản bàn giao. Tài liệu này chưa gán một SHA release giả khi M2 chưa đóng băng.
 
-Nếu tên branch đã tồn tại, chọn tên mới hoặc chuyển sang branch đó nếu đúng branch đang làm. Khi Git yêu cầu đăng nhập, đăng nhập tài khoản có quyền ghi repo qua Git Credential Manager/trình duyệt; không gửi token vào chat.
+Lịch sử PR liên quan gồm #26 sửa Auth/M3, #25 và #28 nối UI thật, #29 sửa token GPS của M1, #27 QA/DevOps trên develop. Danh sách này dùng để truy vết phần nền. Kết quả review, CI hay nghiệm thu của PR cũ không được suy ra thành kết quả của bản nộp mới.
 
-## 2. Tạo Pull Request
+- [Repository](https://github.com/Lilian576/Last-MileExpressLogistics-ParcelTrackingSystem)
+- [Nhánh M3](https://github.com/Lilian576/Last-MileExpressLogistics-ParcelTrackingSystem/tree/feature/m3-final-revision)
+- [PR M3 trước đây](https://github.com/Lilian576/Last-MileExpressLogistics-ParcelTrackingSystem/pull/26)
+- [PR QA/DevOps](https://github.com/Lilian576/Last-MileExpressLogistics-ParcelTrackingSystem/pull/27)
+- [GitHub Actions](https://github.com/Lilian576/Last-MileExpressLogistics-ParcelTrackingSystem/actions)
+- [User Story và bản thảo issue](issues/README.md)
 
-Trên GitHub chọn Compare & pull request. Base là **develop**, compare là **feature/m3-srs-uml-rate-limit**. Nội dung PR đề xuất:
+## 2. Đóng góp trong lần sửa
 
-```text
-Thêm SRS có truy vết 9 user story, UML Use Case/Class/Sequence và 9 bản thảo GitHub Issues giữ nguyên Gherkin trong docs/m3.md.
+| Mã | Nội dung đã chuẩn bị | Trạng thái bàn giao |
+|---|---|---|
+| D01 | Admin dispatch_last_mile, seed đủ bốn role, bảy cột nullable cho phí/tọa độ/xác nhận giao | Build, unit và kiểm tra PostgreSQL cục bộ đạt |
+| D01 | Giữ migration cũ, dữ liệu thiếu trường là NULL, seed không ghi đè tài khoản/hub | Thử DB rỗng, DB cũ và seed lại đạt |
+| D02 | SRS, ma trận actor/event, REST/socket/assignment, OpenAPI 3.1 và contract webhook | Đã đối chiếu controller và DTO ở main, chờ M1/M2 review |
+| D02 | PDF Use Case, Class, Sequence và ERD cùng nguồn | Đã render và kiểm tra trực quan |
+| D03 | Hồ sơ chức năng, thiết kế, test, truy vết và giới hạn | Bản bàn giao đã có, chờ Q03/R02 để chốt release |
 
-Thêm HTTP rate limiting theo IP: 120 request/60s toàn API, 10 request/60s dùng chung cho login/register; trả 429 và Retry-After. Cấu hình qua RATE_LIMIT_WINDOW_MS, RATE_LIMIT_MAX, RATE_LIMIT_AUTH_MAX.
+M3 giữ interface onTransition bốn tham số, đồng bộ kiểu payload với gateway và frontend đang dùng. M2 sở hữu việc cài notifier, API lifecycle, ghi các cột mới, xác thực GPS, side effect assignment và gửi webhook. Tài liệu phân biệt phần có trên main với hợp đồng cần tích hợp.
 
-Thêm contract TransitionNotifier.onTransition(parcelId, from, to, actor) cho M2 gọi sau commit DB thành công, cùng kiểu public payload { trackingCode, status, updatedAt }. Contract chưa được nối vào ParcelsService/TrackingGateway; chi tiết và khoảng trống tích hợp ở docs/INTEGRATION.md.
+## 3. Kết quả kiểm chứng tại máy ngày 25/11/2026
 
-Validation: npm run build thành công; npm test -- --runInBand đạt 5 suites, 23 tests. Đã đối chiếu đủ 9 User Story/Gherkin với docs/m3.md.
-```
+Môi trường gồm Windows, Node 24.19.0, Prisma 5.22.0 và PostgreSQL 18. DB thử nghiệm được tạo riêng trên localhost, không dùng dữ liệu triển khai.
 
-Mời ít nhất một thành viên khác review và approve, sau đó Squash and merge vào develop theo TEAM.md. Không tự đánh dấu đã hoàn tất PR/review/merge trước khi thực hiện thật.
+| Kiểm tra | Kết quả |
+|---|---|
+| npm ci theo package-lock | Thành công |
+| prisma generate và prisma validate | Thành công |
+| npm run build | Thành công |
+| Unit test backend | 9 suite, 51 test pass |
+| Kiểm quyền mới | Admin điều phối last mile tại hub cuối được chấp nhận, hub trung gian bị từ chối |
+| Kiểm sai actor | Customer, shipper và warehouse_staff không được dispatch_last_mile |
+| Integrity transition table | Đủ 16 cặp from/event, không trùng |
+| DB rỗng | Áp dụng đầy đủ 4 migration thành công, deploy lại không có migration chờ |
+| DB có dữ liệu cũ | Tạo theo 3 migration cũ, chèn parcel DELIVERED, áp dụng migration mới thành công |
+| Dữ liệu cũ sau nâng cấp | Giữ nguyên trạng thái và địa chỉ, bảy cột mới vẫn NULL |
+| Seed trên hai DB | Năm tài khoản, đủ bốn role, hai hub |
+| Seed chạy lại | User, password hash, tọa độ, timestamps và hub không bị thay đổi |
+| Ghi/đọc trường mới qua Prisma | Phí, tọa độ, deliveryProof và deliveredAt đọc lại đúng |
+| Auth qua HTTP với PostgreSQL | Đăng nhập thành công năm tài khoản seeded, role đúng |
+| Tự đăng ký role admin qua HTTP | Response vẫn có user.role=customer |
+| OpenAPI 3.1 | Redocly lint kiểm cấu trúc và refs, chi tiết cảnh báo bên dưới |
+| PDF UML | Bốn file hợp lệ, mỗi file một trang, đã render lại để kiểm tra |
 
-## 3. Tạo đủ 9 GitHub Issues và gán người
+OpenAPI dùng localhost cho môi trường demo và có schema location dùng riêng trong phần mở rộng Socket.IO. Redocly có thể cảnh báo địa chỉ local và component chỉ được tham chiếu qua extension. Các cảnh báo đó không được tính thành lỗi schema.
 
-Đẩy file Markdown lên Git không tự tạo GitHub Issues. Mở tab Issues → New issue, lần lượt dùng [US-01](issues/US-01.md) đến [US-09](issues/US-09.md): lấy dòng tiêu đề làm title (bỏ dấu #), phần còn lại làm description, giữ nguyên toàn bộ User Story và Gherkin.
+Bộ npm hiện báo các lỗ hổng dependency có sẵn trong lockfile. Lần sửa M3 giữ dependency hiện hành. Q02 cần rà dependency trước triển khai thật. Kết quả 51 test là unit/integration giả DB sẵn có cộng test quyền M3. Các kiểm tra PostgreSQL trên là migrate/seed/auth và lưu trường, chưa phải E2E giao trọn vòng đời.
 
-Ở Assignees, chọn **đúng một tài khoản** theo phân công đã chốt. Bảng M2/M3 trong [danh sách issue](issues/README.md) là đề xuất vai trò, cần đổi sang username thật; không mặc định chủ repo là người phụ trách mọi story. Kiểm tra issue hiện có để tránh tạo trùng.
+## 4. Cách kiểm tra lại và demo phần M3
 
-Sau khi tạo, thay Pending trong docs/issues/README.md bằng URL issue thật; ghi username assignee đã chốt trong từng body. Commit và push bổ sung bảng truy vết này trên branch làm việc; nếu PR đã merge thì dùng branch/PR mới. Trong PR triển khai từng story, liên kết issue tương ứng. Đây mới là bằng chứng đáp ứng yêu cầu mỗi story có một người.
+Trong backend, cấu hình DATABASE_URL trỏ DB demo riêng, JWT_SECRET riêng và DEMO_SEED_PASSWORD theo INTEGRATION.md. Thực hiện npm ci, npx prisma migrate deploy, npx prisma generate, npx prisma db seed, npm run build và npm test -- --runInBand. Khởi động backend bằng npm run start:dev.
 
-## 4. Kiểm tra local
+Dùng customer@example.test, warehouse@example.test, admin@example.test, shipper1@example.test, shipper2@example.test để kiểm login, mật khẩu theo DEMO_SEED_PASSWORD lúc seed tạo tài khoản. Seed lại không reset mật khẩu.
 
-```powershell
-Set-Location backend
-npm run build
-npm test -- --runInBand
-Set-Location ..
-```
+Đọc ma trận event ở m3.md để M4 xây fixture cho luồng lấy hàng, kho và điều phối. Các cột feeVnd/tọa độ/bằng chứng đã sẵn sàng trong PostgreSQL. Việc API create/status ghi các cột đó cần B01 tích hợp trước khi demo đầy đủ qua UI.
 
-UML nằm ở docs/uml/*.puml; mở bằng PlantUML để preview hoặc xuất SVG/PNG khi cần nộp ảnh. Các sơ đồ hiện là file nguồn, chưa có ảnh render đính kèm.
+## 5. Tiêu chí còn mở trước bảo vệ
 
-Rate limiter lưu quota trong từng process; khi dùng nhiều replica phải dùng shared store/gateway. Tham số môi trường và cách xử lý reverse proxy nằm ở docs/INTEGRATION.md. Không cần dependency mới cho các thay đổi này.
+| Phụ thuộc | Việc cần xác nhận |
+|---|---|
+| R01 / M2 | Đồng bộ develop với main, issue có assignee, PR review độc lập và ruleset |
+| B01 / M2 | Lifecycle tới DELIVERED, assignment đóng/mở đúng, lưu phí/tọa độ/bằng chứng qua API |
+| B02 / M2 | Quyền GET và GPS theo DB, lưu vị trí mới nhất, notifier sau commit ở mọi đường ghi |
+| B03 / M2 | HTTP webhook có ký, timeout và xử lý lỗi receiver theo OpenAPI |
+| F01–F02 / M1 | UI nhân sự, dữ liệu phí/bằng chứng, reconnect và GPS snapshot |
+| Q01–Q03 / M4 | PostgreSQL delivery E2E, Playwright API, coverage, Compose và nghiệm thu hai màn hình |
+| D03 / M3 | Nhận kết quả Q03, thay mốc release và bổ sung PR/CI/video của đúng SHA |
+| R02 / M2 | Đóng băng source sau khi checklist đạt |
+
+GPS frontend có thể lấy từ trình duyệt hoặc mô phỏng khi không lấy được vị trí. Bản bàn giao chưa có bằng chứng GPS thiết bị thật. Không gắn kết quả giả lập với lời khẳng định GPS thực tế hoặc bảo đảm dưới 1 giây. M4 ghi nguồn GPS và số đo nhiều lượt trong Q03.
+
+Bản này chưa có CI E2E/Playwright và kết quả Q03 cho release mới. CI trên nhánh feature không tự chạy vì workflow hiện chỉ trigger push vào main/develop hoặc PR nhắm hai nhánh đó. M2 đồng bộ develop trước khi mở PR tích hợp theo TEAM.md để tránh đưa chênh lệch cả frontend/DevOps vào PR riêng M3.

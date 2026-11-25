@@ -1,5 +1,5 @@
 config:
-  target: "{{ $env.API_BASE_URL }}"
+  target: 'http://127.0.0.1:3000'
   phases:
     - duration: 30
       arrivalRate: 5
@@ -7,15 +7,20 @@ config:
     - duration: 60
       arrivalRate: 10
       name: sustained-tracking
+    - duration: 20
+      arrivalRate: 10
+      name: websocket-room-load
   defaults:
     headers:
       content-type: application/json
+  engines:
+    socketio-v3: {}
 
 scenarios:
   - name: public tracking and fee quote
     flow:
       - post:
-          url: "/api/parcels/calculate-fee"
+          url: '/api/parcels/calculate-fee'
           json:
             weightKg: 2
             senderLat: 10.776
@@ -23,11 +28,19 @@ scenarios:
             receiverLat: 10.823
             receiverLng: 106.629
           capture:
-            - json: "$.fee"
+            - json: '$.fee'
               as: fee
           expect:
             - statusCode: 201
       - get:
-          url: "/api/public/track/LM_LOAD_TEST_NOT_FOUND"
+          url: '/api/public/track/LM_LOAD_TEST_NOT_FOUND'
           expect:
             - statusCode: 404
+  - name: 'Clients join tracking room'
+    engine: socketio-v3
+    flow:
+      - emit:
+          channel: 'join:parcel'
+          data:
+            trackingCode: 'PCL-LOADTEST-01'
+      - think: 5

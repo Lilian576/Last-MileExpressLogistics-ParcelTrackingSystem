@@ -27,6 +27,7 @@ export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean, t
   const [source, setSource] = useState<GpsSource>("simulated");
   const [lastSent, setLastSent] = useState<Date | null>(null);
   const [rejected, setRejected] = useState<string | null>(null); // lý do server từ chối vị trí
+  const [connected, setConnected] = useState(true); // trạng thái socket phát GPS (mock luôn true)
   const codesRef = useRef<string[]>([]);
   codesRef.current = (parcels ?? []).filter((p) => MOVING.includes(p.currentStatus)).map((p) => p.trackingCode);
   const hasActive = codesRef.current.length > 0;
@@ -35,7 +36,12 @@ export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean, t
     if (!enabled || !hasActive) return;
 
     let socket: Socket | null = null;
-    if (!USE_MOCK) socket = io(SOCKET_URL, { transports: ["websocket"], reconnection: true, auth: { token } });
+    if (!USE_MOCK) {
+      socket = io(SOCKET_URL, { transports: ["websocket"], reconnection: true, auth: { token } });
+      socket.on("connect", () => setConnected(true));
+      socket.on("disconnect", () => setConnected(false));
+      socket.on("connect_error", () => setConnected(false));
+    }
 
     let fix: { lat: number; lng: number } | null = null;
     let sim = { ...SIM_START };
@@ -60,6 +66,8 @@ export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean, t
         sim = nextSimulated(sim);
         pos = sim;
       }
+      // Đang mất kết nối: không phát (tránh socket.io dồn hàng đợi rồi xả loạt vị trí cũ khi có mạng lại)
+      if (socket && !socket.connected) return;
       for (const trackingCode of codesRef.current) {
         if (socket) {
           socket.emit(
@@ -77,9 +85,10 @@ export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean, t
     return () => {
       clearInterval(timer);
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+      socket?.off(); // gỡ listener trước khi đóng để không rò rỉ
       socket?.disconnect();
     };
   }, [enabled, hasActive, token]);
 
-  return { source, lastSent, rejected, active: enabled && hasActive };
+  return { source, lastSent, rejected, connected, active: enabled && hasActive };
 }

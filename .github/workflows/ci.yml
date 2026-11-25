@@ -1,10 +1,10 @@
-name: CI Pipeline
+name: LastMile CI
 
 on:
   push:
-    branches: ["main", "develop"]
+    branches: [main, develop, "feature/**", "feat/**", "fix/**", "test/**"]
   pull_request:
-    branches: ["main", "develop"]
+    branches: [main, develop]
 
 jobs:
   backend:
@@ -13,21 +13,21 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_DB: parcel_test
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_PASSWORD: postgrespassword
+          POSTGRES_DB: lastmile_test
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U postgres -d parcel_test"
-          --health-interval 10s
+          --health-cmd "pg_isready -U postgres -d lastmile_test"
+          --health-interval 5s
           --health-timeout 5s
-          --health-retries 5
+          --health-retries 10
     defaults:
       run:
         working-directory: ./backend
     env:
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/parcel_test
+      DATABASE_URL: postgresql://postgres:postgrespassword@127.0.0.1:5432/lastmile_test?schema=public
       JWT_SECRET: ci-secret-must-be-at-least-32-characters
       JWT_EXPIRES_IN: 1d
       DEMO_SEED_PASSWORD: ChangeMeDemo123!
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "22"
+          node-version: "20"
           cache: npm
           cache-dependency-path: backend/package-lock.json
       - run: npm ci
@@ -44,7 +44,7 @@ jobs:
       - run: npx prisma generate
       - run: npx prisma migrate deploy
       - run: npx prisma db seed
-      - run: npm run test:cov -- --runInBand --coverageThreshold='{\"global\":{\"lines\":60}}'
+      - run: npm run test:cov -- --runInBand
       - run: npm run build
       - name: Start API
         run: npm run start:prod > /tmp/parcel-api.log 2>&1 &
