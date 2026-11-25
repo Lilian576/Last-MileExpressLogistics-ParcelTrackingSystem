@@ -1,61 +1,55 @@
 @startuml
+title LeMail - Use cases and MVP roles
 left to right direction
+skinparam dpi 150
+skinparam shadowing false
 actor Customer
 actor Shipper
 actor "Warehouse staff" as Warehouse
-actor Dispatcher
-actor "System scheduler" as Scheduler
+actor "Admin / dispatcher" as Admin
+actor "Internal system job" as System
 actor "Public viewer" as Viewer
-rectangle "LeMail parcel system" {
-  usecase "US-01 Create parcel" as Create
-  usecase "US-02 Assign courier" as Assign
+rectangle "Parcel tracking" {
+  usecase "US-01 Create parcel\nand calculate fee" as Create
+  usecase "US-02 Assign pickup" as Assign
   usecase "US-03 Confirm pickup" as Pickup
-  usecase "US-04 Scan / transfer hub" as Hub
+  usecase "US-04 Depart / receive /\ntransfer hub" as Hub
   usecase "US-04 Dispatch last mile" as Dispatch
-  usecase "US-05 Confirm delivery" as Deliver
-  usecase "US-06 Report failure / retry" as Retry
-  usecase "US-07 Return to sender" as Return
+  usecase "US-05 Confirm delivery\nwith verified evidence" as Deliver
+  usecase "US-06 Report delivery failure" as Failure
+  usecase "US-06 Retry / return decision" as Retry
+  usecase "US-07 Confirm return" as Return
   usecase "US-08 Cancel before pickup" as Cancel
-  usecase "US-09 Detect lost / open claim" as Lost
-  usecase "Public tracking / realtime" as Track
-  usecase "Validate transition" as Validate
-  usecase "Append audit history" as Audit
+  usecase "US-09 SLA timeout" as Lost
+  usecase "Public tracking\nREST + Socket.IO" as Track
 }
 Customer --> Create
 Customer --> Cancel
 Customer --> Track
 Viewer --> Track
-Dispatcher --> Assign
-Scheduler --> Assign
+Admin --> Assign
+Admin --> Dispatch
 Shipper --> Pickup
-Warehouse --> Hub
 Shipper --> Hub
-Dispatcher --> Dispatch
+Warehouse --> Hub
 Shipper --> Deliver
-Shipper --> Retry
-Scheduler --> Retry
+Shipper --> Failure
 Shipper --> Return
-Scheduler --> Lost
-Warehouse --> Lost
-Create ..> Validate : <<include>>
-Assign ..> Validate : <<include>>
-Pickup ..> Validate : <<include>>
-Hub ..> Validate : <<include>>
-Dispatch ..> Validate : <<include>>
-Deliver ..> Validate : <<include>>
-Retry ..> Validate : <<include>>
-Return ..> Validate : <<include>>
-Cancel ..> Validate : <<include>>
-Lost ..> Validate : <<include>>
-Create ..> Audit : <<include>>
-Assign ..> Audit : <<include>>
-Pickup ..> Audit : <<include>>
-Hub ..> Audit : <<include>>
-Dispatch ..> Audit : <<include>>
-Deliver ..> Audit : <<include>>
-Retry ..> Audit : <<include>>
-Return ..> Audit : <<include>>
-Cancel ..> Audit : <<include>>
-Lost ..> Audit : <<include>>
-note right of Audit : Only when the state transition is persisted
+System --> Assign
+System --> Retry
+System --> Lost
+note bottom of Admin
+  Prisma role = admin.
+  No dispatcher login in MVP.
+end note
+note bottom of System
+  Target job design.
+  SLA/retry jobs and claim tickets
+  still require B01 integration.
+end note
+note bottom of Deliver
+  D01 prepares evidence columns.
+  B01 validates and persists evidence.
+  Full workflow acceptance belongs to Q01/Q03.
+end note
 @enduml

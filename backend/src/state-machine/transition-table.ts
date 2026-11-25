@@ -103,7 +103,7 @@ export const TRANSITION_TABLE: TransitionDefinition[] = [
     from: ParcelStatus.AT_HUB,
     to: ParcelStatus.OUT_FOR_DELIVERY,
     event: TransitionEvent.DISPATCH_LAST_MILE,
-    allowedActors: ['dispatcher'],
+    allowedActors: ['dispatcher', 'admin'],
     guardDescription: 'Đến hub phụ trách khu vực giao',
     sideEffect: "Tạo delivery_assignments (loại last-mile)",
     guard: (ctx) => ctx.isFinalHub === true,

@@ -11,26 +11,33 @@ export interface TransitionNotifier {
   ): Promise<void>;
 }
 
-export type PublicParcelStatus =
-  | 'Order Placed'
-  | 'Received'
-  | 'In-Transit'
-  | 'Out for Delivery'
-  | 'Delivered'
-  | 'Being Returned'
-  | 'Returned'
-  | 'Cancelled'
-  | 'Delayed';
-
-/** Public snapshot notification; excludes internal status, actors and PII. */
+/** Wire format already consumed by M1 and emitted by TrackingGateway. */
 export interface ParcelStatusUpdatedPayload {
   trackingCode: string;
-  status: PublicParcelStatus;
-  /** ISO 8601 timestamp from the persisted parcel snapshot. */
-  updatedAt: string;
+  currentStatus: ParcelStatus;
+  event: {
+    status: ParcelStatus;
+    /** ISO 8601 UTC, from the committed history row. */
+    timestamp: string;
+    note?: string;
+  };
 }
 
-export interface ParcelDeliveryCompletedPayload
-  extends ParcelStatusUpdatedPayload {
-  status: 'Delivered';
+export interface ParcelDeliveryCompletedPayload extends ParcelStatusUpdatedPayload {
+  currentStatus: 'DELIVERED';
+}
+
+export interface ParcelLocationUpdatedPayload {
+  trackingCode: string;
+  latitude: number;
+  longitude: number;
+  timestamp: string;
+}
+
+/** B03 handoff contract. Sending and signing are implemented by M2. */
+export interface ParcelStatusWebhookPayload {
+  eventId: string;
+  type: 'parcel.status.updated';
+  occurredAt: string;
+  data: ParcelStatusUpdatedPayload;
 }
