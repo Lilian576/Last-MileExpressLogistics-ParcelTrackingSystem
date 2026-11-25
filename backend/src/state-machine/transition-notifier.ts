@@ -8,6 +8,7 @@ export interface TransitionNotifier {
     from: ParcelStatus | null,
     to: ParcelStatus,
     actor: TransitionActor,
+    notification: { id: string; update: ParcelStatusUpdatedPayload },
   ): Promise<void>;
 }
 

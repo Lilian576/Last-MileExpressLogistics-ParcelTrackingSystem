@@ -55,11 +55,11 @@ export function DriverOrdersPage() {
 
   if (!session || !token) return <Navigate to="/driver/login" replace />;
 
-  async function handleAction(parcel: DriverParcel, action: ShipperAction, hasProof: boolean) {
+  async function handleAction(parcel: DriverParcel, action: ShipperAction, proofRef: string) {
     setBusyId(parcel.id);
     setRowError((e) => ({ ...e, [parcel.id]: "" }));
     try {
-      const newStatus = await updateParcelStatus(token!, parcel, action, hasProof);
+      const newStatus = await updateParcelStatus(token!, parcel, action, proofRef);
       setParcels((list) => list?.map((p) => (p.id === parcel.id ? { ...p, currentStatus: newStatus } : p)) ?? list);
     } catch (err) {
       if (err instanceof AuthExpiredError) return logout();
@@ -93,6 +93,7 @@ export function DriverOrdersPage() {
           <span className="muted">
             · {gps.source === "gps" ? "GPS thiết bị" : "GPS giả lập"}
             {gps.lastSent && ` · gửi lúc ${gps.lastSent.toLocaleTimeString("vi-VN")}`}
+            {!gps.connected && <b role="alert"> · ⚠ mất kết nối máy chủ, tạm dừng gửi vị trí</b>}
             {gps.rejected && <b role="alert"> · ⚠ server từ chối vị trí: {gps.rejected}</b>}
           </span>
         )}

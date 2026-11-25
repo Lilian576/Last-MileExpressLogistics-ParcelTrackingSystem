@@ -556,3 +556,37 @@ body::before {
   margin-bottom: 14px;
   font-size: 13.5px;
 }
+
+/* Thông báo lỗi / cảnh báo chung (dùng ngoài .field) */
+.error {
+  color: var(--stamp-red-dark);
+  font-size: 13.5px;
+}
+.notice {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  font-size: 13.5px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.55);
+}
+.notice-warn {
+  border-color: var(--warn-amber);
+  color: var(--ink);
+}
+
+/* Giao diện vận hành (/ops) */
+.ops-assign {
+  margin-top: 12px;
+}
+.ops-assign-row {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+@media (max-width: 560px) {
+  .ops-assign-row {
+    grid-template-columns: 1fr;
+  }
+}

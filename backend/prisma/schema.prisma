@@ -89,6 +89,9 @@ model Parcel {
   receiverPhone         String       @map("receiver_phone")
   receiverAddress       String       @map("receiver_address")
   weightKg              Decimal      @map("weight_kg")
+  driverLatitude        Decimal?     @map("driver_latitude")
+  driverLongitude       Decimal?     @map("driver_longitude")
+  driverLocationAt      DateTime?    @map("driver_location_at")
   dimensions            String?
   codAmount             Decimal?     @map("cod_amount")
   // Nullable for records created before the final-term migration.

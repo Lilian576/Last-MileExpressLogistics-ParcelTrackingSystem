@@ -4,6 +4,7 @@ import {
   INestApplication,
   ValidationPipe,
 } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
 import { Server } from 'http';
 import { AddressInfo } from 'net';
@@ -21,7 +22,9 @@ interface FakeParcel {
   receiverPhone: string;
   receiverAddress: string;
   currentStatus: string;
+  failedAttemptCount: number;
   createdAt: Date;
+  updatedAt: Date;
 }
 interface FakeHistory {
   parcelId: string;
@@ -34,7 +37,7 @@ interface FakeHistory {
 // Prisma giả trong bộ nhớ, đủ cho luồng: tra cứu công khai + đổi trạng thái
 function createFakePrisma(parcel: FakeParcel) {
   const history: FakeHistory[] = [];
-  return {
+  const prisma = {
     history,
     parcel: {
       findUnique: ({
@@ -53,6 +56,10 @@ function createFakePrisma(parcel: FakeParcel) {
         return Promise.resolve({ ...parcel });
       },
     },
+    deliveryAssignment: {
+      findMany: () => Promise.resolve([{ courierId: 'driver-1' }]),
+      updateMany: () => Promise.resolve({ count: 1 }),
+    },
     parcelStatusHistory: {
       create: ({
         data,
@@ -68,8 +75,10 @@ function createFakePrisma(parcel: FakeParcel) {
         return Promise.resolve(row);
       },
     },
-    $transaction: (ops: Promise<unknown>[]) => Promise.all(ops),
+    $transaction: (fn: (tx: unknown) => Promise<unknown>) => fn(fakePrisma),
   };
+  const fakePrisma = prisma;
+  return prisma;
 }
 
 // Giả lập JwtAuthGuard: coi như đã đăng nhập với role shipper
@@ -97,13 +106,23 @@ describe('Realtime tracking end-to-end', () => {
     receiverPhone: '0900000000',
     receiverAddress: '1 Lê Lợi',
     currentStatus: 'PENDING_PICKUP',
+    failedAttemptCount: 0,
     createdAt: new Date('2026-10-27T01:00:00.000Z'),
+    updatedAt: new Date(),
   };
 
   beforeAll(async () => {
     fake = createFakePrisma(parcel);
     const moduleRef = await Test.createTestingModule({
-      imports: [ParcelsModule],
+      imports: [
+        ConfigModule.forRoot({
+          isGlobal: true,
+          ignoreEnvFile: true,
+          // AuthModule yêu cầu JWT_SECRET riêng, không chấp nhận giá trị mặc định
+          load: [() => ({ JWT_SECRET: 'test-only-signing-key' })],
+        }),
+        ParcelsModule,
+      ],
     })
       .overrideProvider(PrismaService)
       .useValue(fake)
@@ -153,7 +172,7 @@ describe('Realtime tracking end-to-end', () => {
 
     await request(url)
       .patch('/api/parcels/p1/status')
-      .send({ event: 'confirm_pickup', isAssignedCourier: true })
+      .send({ event: 'confirm_pickup' })
       .expect(200);
 
     const update = await received;

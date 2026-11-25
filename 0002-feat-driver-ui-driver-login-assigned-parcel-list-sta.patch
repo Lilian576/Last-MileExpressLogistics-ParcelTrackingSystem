@@ -1,0 +1,1195 @@
+From 326f73349710647db00b0fe9c4a2b04385356129 Mon Sep 17 00:00:00 2001
+From: dev <dev@example.com>
+Date: Tue, 3 Nov 2026 01:33:38 +0000
+Subject: [PATCH 2/2] feat(driver-ui): driver login, assigned parcel list,
+ status buttons; realtime tracking via WebSocket
+
+---
+ Frontend/.env.example                         |   4 +
+ Frontend/README.md                            |  68 +++++--
+ Frontend/src/App.tsx                          |   7 +
+ Frontend/src/api/driverApi.ts                 |  72 ++++++++
+ Frontend/src/api/errors.ts                    |   7 +
+ Frontend/src/api/mockBackend.ts               | 170 +++++++++++++++---
+ Frontend/src/api/parcelApi.ts                 |  81 +++++----
+ .../src/components/driver/DriverLoginPage.tsx |  75 ++++++++
+ .../components/driver/DriverOrdersPage.tsx    | 114 ++++++++++++
+ .../components/driver/DriverParcelCard.tsx    |  76 ++++++++
+ .../src/components/tracking/TrackingPage.tsx  |  16 +-
+ Frontend/src/index.css                        |  43 +++++
+ Frontend/src/lib/driverSession.ts             |  30 ++++
+ Frontend/src/lib/parcelUpdates.ts             |  25 +++
+ Frontend/src/types/driver.ts                  |  64 +++++++
+ Frontend/src/types/parcel.ts                  |  10 ++
+ 16 files changed, 793 insertions(+), 69 deletions(-)
+ create mode 100644 Frontend/.env.example
+ create mode 100644 Frontend/src/api/driverApi.ts
+ create mode 100644 Frontend/src/api/errors.ts
+ create mode 100644 Frontend/src/components/driver/DriverLoginPage.tsx
+ create mode 100644 Frontend/src/components/driver/DriverOrdersPage.tsx
+ create mode 100644 Frontend/src/components/driver/DriverParcelCard.tsx
+ create mode 100644 Frontend/src/lib/driverSession.ts
+ create mode 100644 Frontend/src/lib/parcelUpdates.ts
+ create mode 100644 Frontend/src/types/driver.ts
+
+diff --git a/Frontend/.env.example b/Frontend/.env.example
+new file mode 100644
+index 0000000..4901ba8
+--- /dev/null
++++ b/Frontend/.env.example
+@@ -0,0 +1,4 @@
++# Copy thành .env.local để ghi đè cấu hình mặc định (mặc định: dùng mock, không cần backend)
++# VITE_USE_MOCK=false
++# VITE_API_BASE_URL=http://localhost:3000
++# VITE_SOCKET_URL=http://localhost:3000
+diff --git a/Frontend/README.md b/Frontend/README.md
+index 3ebd4f9..70b566c 100644
+--- a/Frontend/README.md
++++ b/Frontend/README.md
+@@ -39,6 +39,48 @@ mềm (502045), Nhóm 4 người. Xem phân công đầy đủ tại [`TEAM.md`]
+   `USE_MOCK=true`) để demo hành vi reconnect ngay cả khi chưa nối được
+   backend WebSocket thật.
+ 
++### Tuần 2–3 — Driver UI (tài xế)
++- `/driver/login` (`DriverLoginPage`): đăng nhập bằng `POST /auth/login`, chỉ nhận
++  tài khoản role `shipper`; token lưu ở `lib/driverSession.ts`.
++- `/driver` (`DriverOrdersPage` + `DriverParcelCard`): danh sách đơn được giao
++  (`GET /api/parcels/assigned/mine`), tự làm mới mỗi 15s + nút "Làm mới".
++- **Nút cập nhật trạng thái** chỉ hiện đúng các bước mà actor `shipper` được phép
++  theo `transition-table.ts` (xem `SHIPPER_ACTIONS` trong `types/driver.ts`):
++  `PENDING_PICKUP→PICKED_UP`, `PICKED_UP→IN_TRANSIT`,
++  `OUT_FOR_DELIVERY→DELIVERED | DELIVERY_FAILED`, `RETURNING→RETURNED`.
++  "Giao thành công" bị khóa tới khi tick "đã có bằng chứng giao hàng" (guard
++  `hasDeliveryProof`). Các bước còn lại (kho/điều phối/hệ thống) hiển thị lý do chờ.
++- Gọi `PATCH /api/parcels/:id/status` — mọi luật vẫn do `StateMachineService`
++  kiểm tra lại ở backend; lỗi 400/403 hiện ngay trên thẻ đơn, 401 → về trang login.
++
++### Tuần 4 — Hợp đồng WebSocket (M1 ↔ M2)
++| Chiều | Event | Payload |
++|---|---|---|
++| client → server | `join:parcel` / `leave:parcel` | `{ trackingCode }` (server ack `{ ok, trackingCode }`) |
++| server → room `parcel:<trackingCode>` | `parcel.status.updated` | `{ trackingCode, currentStatus, event: { status, timestamp, note? } }` |
++| server → room | `parcel.delivery.completed` | cùng payload, chỉ khi `DELIVERED` |
++
++Payload là **bản vá** (trạng thái mới + 1 mốc lịch sử), không phải cả `Parcel`:
++client giữ bản nền từ REST và ghép vào (`lib/parcelUpdates.ts`), nên backend
++không phải dựng lại `Parcel` của Frontend. Sau mỗi (re)connect client join lại
++room + resync REST; snapshot cũ hơn dữ liệu đang có sẽ bị bỏ qua (không lùi trạng thái).
++
++Backend phát event trong `ParcelsService.updateStatus()` **sau khi** DB lưu thành
++công (cùng transaction ghi `parcel_status_history`).
++
++### Demo 2 màn hình song song (chế độ mock, không cần backend)
++`mockBackend` lưu dữ liệu vào `localStorage` và phát event qua `BroadcastChannel`,
++nên 2 tab cùng trình duyệt dùng chung dữ liệu:
++1. Tab A: tạo đơn ở `/`, mở `/tracking/<mã>`; bấm nút demo `→ PENDING_PICKUP`
++   (đóng vai điều phối gán tài xế).
++2. Tab B: `/driver/login` (`driver@demo.vn` / `123456`) → bấm "Đã lấy hàng" …
++   → tab A cập nhật ngay, không reload.
++3. Các bước của kho (`→ AT_HUB`, `→ OUT_FOR_DELIVERY`) bấm bằng nút demo ở tab A.
++`MOCK_AUTO_PROGRESS` (trong `mockBackend.ts`) mặc định **tắt** để tài xế có việc để làm;
++đặt `true` nếu muốn đơn tự chạy tới DELIVERED khi demo riêng màn hình khách.
++
++Chạy với backend thật: `VITE_USE_MOCK=false npm run dev` (xem `.env.example`).
++
+ ### ⚠️ Đối chiếu với code backend thật (đọc trực tiếp từ repo `backend/src`)
+ 
+ Sau khi đọc code thật của M2/M3, phát hiện vài điểm CẦN THỐNG NHẤT LẠI trước
+@@ -51,13 +93,10 @@ khi tắt `USE_MOCK`:
+    OUT_FOR_DELIVERY, DELIVERED, DELIVERY_FAILED, RETURNING, RETURNED,
+    CANCELLED, LOST` (trước đó `types/parcel.ts` dùng enum tự đoán, đã lệch —
+    nay đã đồng bộ).
+-2. **`backend/src/tracking/tracking.gateway.ts` hiện chỉ có
+-   `@SubscribeMessage('ping')`** trả về `'pong'` — CHƯA có `join:parcel`
+-   (room theo trackingCode) và CHƯA emit `parcel.status.updated` khi
+-   `StateMachineService` transition thành công. Đây là việc M2 cần hoàn
+-   thành theo đúng checklist Tuần 4 của M2 trong `TEAM.md`. Trước khi việc
+-   đó xong, để `USE_MOCK=true` — bật `false` sớm sẽ chỉ connect được
+-   (ping/pong) nhưng không nhận được cập nhật trạng thái thật.
++2. ~~Gateway chỉ có ping/pong~~ → **đã bổ sung**: `join:parcel`, `leave:parcel`
++   và `emitStatusUpdated()` (gọi từ `ParcelsService.updateStatus`); có test
++   WebSocket thật ở `backend/src/tracking/tracking.gateway.spec.ts`. M4: test
++   e2e cũ `tracking.e2e-spec.ts` đang emit `joinRoom` — cần đổi thành `join:parcel`.
+ 3. **`POST /api/parcels` hiện dùng DTO tối giản** (`senderName, senderLat,
+    senderLng, receiverName, receiverLat, receiverLng, weightKg` — tính khoảng
+    cách bằng công thức Haversine), khác với model `Parcel` đầy đủ trong
+@@ -85,23 +124,29 @@ trước khi nối thật.
+ src/
+   api/
+     parcelApi.ts     # Lớp gọi API — cờ USE_MOCK để chuyển mock ↔ backend thật
+-    mockBackend.ts   # Backend giả lập trong bộ nhớ, dùng để dev UI độc lập
++    mockBackend.ts   # Backend giả lập (localStorage + BroadcastChannel), dev UI độc lập
++    driverApi.ts     # Login / danh sách đơn / cập nhật trạng thái của tài xế
++    errors.ts        # AuthExpiredError (401)
+   components/
+     wizard/          # 4 bước tạo đơn
+     orders/          # Danh sách đơn của tôi
++    driver/          # Driver UI: login + danh sách đơn + nút cập nhật
+     tracking/         # Trang tra cứu + timeline
+     shared/           # Field.tsx (input wrapper dùng chung)
+   lib/
+     myOrders.ts      # Lưu trackingCode đã tạo vào localStorage (tạm, chờ Auth)
++    driverSession.ts # Lưu JWT tài xế
++    parcelUpdates.ts # Ghép bản vá realtime vào Parcel
+   types/
+     parcel.ts        # Types + STATUS_LABEL + state machine (VALID_TRANSITIONS)
++    driver.ts        # Types tài xế + SHIPPER_ACTIONS (bước shipper được phép)
+ docs/
+   WIREFRAME.md       # Đặc tả wireframe/luồng UI (deliverable Tuần 1)
+ ```
+ 
+ ## Cách chuyển từ mock sang backend thật
+ 
+-Toàn bộ UI **không cần sửa** khi M2/M3 xong backend — chỉ cần đổi 3 dòng
++Đổi bằng biến môi trường (`.env.local`, xem `.env.example`) hoặc 3 hằng số
+ trong `src/api/parcelApi.ts`:
+ 
+ ```ts
+@@ -118,7 +163,10 @@ Các endpoint UI đang mong đợi từ backend (đối chiếu với M2/M3):
+ | Tạo đơn           | `POST /api/parcels`               | `POST /api/parcels` (đúng path, khác DTO + cần JWT) | Backend yêu cầu login trước |
+ | Tra cứu công khai | `GET /api/public/track/:code`     | Chưa có — chỉ có `GET /api/parcels/:id` (id số) | Cần M2 thêm route theo trackingCode |
+ | Danh sách đơn     | `GET /api/parcels/mine` (+ JWT)   | Chưa có | Cần AuthModule (M3) + route mới từ M2 |
+-| Realtime tracking | WebSocket `join:parcel` / event `parcel.status.updated`, `parcel.delivery.completed` | Chỉ có `ping`/`pong` demo | TrackingGateway (M2) chưa hoàn thiện theo checklist Tuần 4 |
++| Realtime tracking | WebSocket `join:parcel` / event `parcel.status.updated`, `parcel.delivery.completed` | Gateway đã có (xem mục Hợp đồng WebSocket), test WebSocket thật ở backend | Phía client chạy đầy đủ ở chế độ mock; với backend thật còn phụ thuộc route `GET /api/public/track/:code` (chưa có) để lấy snapshot ban đầu |
++| Driver: đăng nhập | `POST /auth/login` | Đúng (không có prefix `/api`) | |
++| Driver: đơn được giao | `GET /api/parcels/assigned/mine` (+ JWT, role shipper) | Đã thêm | Đơn xuất hiện khi điều phối gọi `PATCH /api/parcels/:id/assign-courier` (tạo `delivery_assignments` status=assigned) |
++| Driver: cập nhật trạng thái | `PATCH /api/parcels/:id/status` | Đúng | Backend nay ghi thêm `parcel_status_history` |
+ 
+ > Xem chi tiết đầy đủ ở mục "⚠️ Đối chiếu với code backend thật" phía trên —
+ > đây là danh sách việc cần chốt lại giữa M1 ↔ M2 ↔ M3 trước khi tắt mock.
+diff --git a/Frontend/src/App.tsx b/Frontend/src/App.tsx
+index f896f86..56d45eb 100644
+--- a/Frontend/src/App.tsx
++++ b/Frontend/src/App.tsx
+@@ -2,6 +2,8 @@ import { NavLink, Route, Routes } from "react-router-dom";
+ import { Wizard } from "./components/wizard/Wizard";
+ import { TrackingPage } from "./components/tracking/TrackingPage";
+ import { OrdersPage } from "./components/orders/OrdersPage";
++import { DriverLoginPage } from "./components/driver/DriverLoginPage";
++import { DriverOrdersPage } from "./components/driver/DriverOrdersPage";
+ 
+ export default function App() {
+   return (
+@@ -20,6 +22,9 @@ export default function App() {
+           <NavLink to="/tracking" className={({ isActive }) => (isActive ? "active" : "")}>
+             Tra cứu
+           </NavLink>
++          <NavLink to="/driver" className={({ isActive }) => (isActive ? "active" : "")}>
++            Tài xế
++          </NavLink>
+         </nav>
+       </header>
+ 
+@@ -28,6 +33,8 @@ export default function App() {
+         <Route path="/orders" element={<OrdersPage />} />
+         <Route path="/tracking" element={<TrackingPage />} />
+         <Route path="/tracking/:code" element={<TrackingPage />} />
++        <Route path="/driver/login" element={<DriverLoginPage />} />
++        <Route path="/driver" element={<DriverOrdersPage />} />
+       </Routes>
+     </div>
+   );
+diff --git a/Frontend/src/api/driverApi.ts b/Frontend/src/api/driverApi.ts
+new file mode 100644
+index 0000000..60fdee3
+--- /dev/null
++++ b/Frontend/src/api/driverApi.ts
+@@ -0,0 +1,72 @@
++import { API_BASE_URL, USE_MOCK } from "./parcelApi";
++import { mockDriverLogin, mockDriverUpdateStatus, mockListAssigned } from "./mockBackend";
++import { AuthExpiredError } from "./errors";
++import { DriverParcel, DriverSession, ShipperAction } from "../types/driver";
++import { ParcelStatus } from "../types/parcel";
++
++// Lấy thông báo lỗi từ response NestJS: { statusCode, message: string | string[], error }
++async function readError(res: Response, fallback: string): Promise<Error> {
++  if (res.status === 401) return new AuthExpiredError();
++  try {
++    const body = (await res.json()) as { message?: string | string[] };
++    const msg = Array.isArray(body.message) ? body.message.join(", ") : body.message;
++    if (msg) return new Error(msg);
++  } catch {
++    // body không phải JSON -> dùng fallback
++  }
++  return new Error(fallback);
++}
++
++// POST /auth/login (backend/src/auth) — chỉ nhận tài khoản role "shipper"
++export async function driverLogin(email: string, password: string): Promise<DriverSession> {
++  const session = USE_MOCK ? await mockDriverLogin(email, password) : await realLogin(email, password);
++  if (session.user.role !== "shipper") {
++    throw new Error("Tài khoản này không phải tài xế (cần role shipper).");
++  }
++  return session;
++}
++
++async function realLogin(email: string, password: string): Promise<DriverSession> {
++  const res = await fetch(`${API_BASE_URL}/auth/login`, {
++    method: "POST",
++    headers: { "Content-Type": "application/json" },
++    body: JSON.stringify({ email, password }),
++  });
++  if (res.status === 401) throw new Error("Email hoặc mật khẩu không đúng");
++  if (!res.ok) throw await readError(res, "Đăng nhập thất bại, vui lòng thử lại.");
++  return res.json();
++}
++
++// GET /api/parcels/assigned/mine — đơn được giao cho tài xế đang đăng nhập
++export async function listAssignedParcels(token: string): Promise<DriverParcel[]> {
++  if (USE_MOCK) return mockListAssigned(token);
++  const res = await fetch(`${API_BASE_URL}/api/parcels/assigned/mine`, {
++    headers: { Authorization: `Bearer ${token}` },
++  });
++  if (!res.ok) throw await readError(res, "Không tải được danh sách đơn được giao.");
++  return res.json();
++}
++
++// PATCH /api/parcels/:id/status — backend (StateMachineService) kiểm tra lại mọi luật
++export async function updateParcelStatus(
++  token: string,
++  parcel: DriverParcel,
++  action: ShipperAction,
++  hasDeliveryProof: boolean
++): Promise<ParcelStatus> {
++  if (USE_MOCK) {
++    const r = await mockDriverUpdateStatus(token, parcel.id, action.event, { hasDeliveryProof });
++    return r.currentStatus;
++  }
++  const body: Record<string, unknown> = { event: action.event };
++  if (action.event === "confirm_pickup") body.isAssignedCourier = true; // đơn nằm trong danh sách của tài xế này
++  if (action.needsProof) body.hasDeliveryProof = hasDeliveryProof;
++  const res = await fetch(`${API_BASE_URL}/api/parcels/${parcel.id}/status`, {
++    method: "PATCH",
++    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
++    body: JSON.stringify(body),
++  });
++  if (!res.ok) throw await readError(res, "Cập nhật trạng thái thất bại.");
++  const updated = (await res.json()) as { currentStatus: ParcelStatus };
++  return updated.currentStatus;
++}
+diff --git a/Frontend/src/api/errors.ts b/Frontend/src/api/errors.ts
+new file mode 100644
+index 0000000..492c58b
+--- /dev/null
++++ b/Frontend/src/api/errors.ts
+@@ -0,0 +1,7 @@
++// Token hết hạn / không hợp lệ (HTTP 401) -> UI đưa tài xế về trang đăng nhập
++export class AuthExpiredError extends Error {
++  constructor(message = "Phiên đăng nhập đã hết hạn, vui lòng đăng nhập lại.") {
++    super(message);
++    this.name = "AuthExpiredError";
++  }
++}
+diff --git a/Frontend/src/api/mockBackend.ts b/Frontend/src/api/mockBackend.ts
+index 188491b..1c232e4 100644
+--- a/Frontend/src/api/mockBackend.ts
++++ b/Frontend/src/api/mockBackend.ts
+@@ -1,22 +1,79 @@
+ import {
+   Parcel,
+   ParcelStatus,
++  ParcelStatusUpdate,
++  TERMINAL_STATUSES,
+   isValidTransition,
+   QuoteRequest,
+   QuoteResponse,
+   CreateParcelRequest,
+ } from "../types/parcel";
++import { DriverParcel, DriverSession, SHIPPER_ACTIONS, ShipperEvent } from "../types/driver";
++import { AuthExpiredError } from "./errors";
+ 
+-// ---- "Database" giả lập trong bộ nhớ (chỉ tồn tại trong phiên làm việc) ----
+-const store = new Map<string, Parcel>();
++// ---- "Database" giả lập ----
++// Lưu trong localStorage (+ bản dự phòng trong bộ nhớ nếu localStorage bị chặn) để
++// 2 tab cùng trình duyệt dùng chung dữ liệu: 1 tab đóng vai tài xế, 1 tab là
++// trang tracking — đúng kịch bản demo "2 màn hình song song" của Tuần 4.
++const STORE_KEY = "lemail.mock.parcels.v1";
++type Store = Record<string, Parcel>;
++let memoryStore: Store = {};
++
++function loadStore(): Store {
++  try {
++    const raw = localStorage.getItem(STORE_KEY);
++    if (raw) return JSON.parse(raw) as Store;
++  } catch {
++    return memoryStore;
++  }
++  return memoryStore;
++}
++
++function saveStore(store: Store) {
++  memoryStore = store;
++  try {
++    localStorage.setItem(STORE_KEY, JSON.stringify(store));
++  } catch {
++    // localStorage bị chặn: vẫn chạy được trong 1 tab nhờ memoryStore
++  }
++}
++
++function getParcel(trackingCode: string): Parcel | undefined {
++  return loadStore()[trackingCode];
++}
++
++function putParcel(parcel: Parcel) {
++  const store = loadStore();
++  store[parcel.trackingCode] = parcel;
++  saveStore(store);
++}
+ 
+ // ---- Pub/sub giả lập kênh WebSocket (thay cho socket.io server thật) ----
+-type Listener = (parcel: Parcel) => void;
+-const listenersByCode = new Map<string, Set<Listener>>();
++// Phát trong tab hiện tại + BroadcastChannel sang các tab khác.
++type StatusListener = (update: ParcelStatusUpdate) => void;
++const listenersByCode = new Map<string, Set<StatusListener>>();
++
++function dispatchLocal(update: ParcelStatusUpdate) {
++  listenersByCode.get(update.trackingCode)?.forEach((cb) => cb(structuredClone(update)));
++}
++
++const channel = typeof BroadcastChannel !== "undefined" ? new BroadcastChannel("lemail-mock") : null;
++if (channel) {
++  channel.onmessage = (e: MessageEvent<ParcelStatusUpdate>) => dispatchLocal(e.data);
++}
++
++function emitUpdate(update: ParcelStatusUpdate) {
++  dispatchLocal(update);
++  channel?.postMessage(update);
++}
+ 
+-function emitUpdate(parcel: Parcel) {
+-  const listeners = listenersByCode.get(parcel.trackingCode);
+-  listeners?.forEach((cb) => cb(structuredClone(parcel)));
++// Đổi trạng thái + ghi lịch sử + phát event (dùng chung cho tài xế và nút demo)
++function applyTransition(parcel: Parcel, to: ParcelStatus) {
++  const event = { status: to, timestamp: new Date().toISOString() };
++  parcel.currentStatus = to;
++  parcel.history.push(event);
++  putParcel(parcel);
++  emitUpdate({ trackingCode: parcel.trackingCode, currentStatus: to, event });
+ }
+ 
+ function genTrackingCode(): string {
+@@ -64,15 +121,15 @@ export async function mockCreateParcel(req: CreateParcelRequest): Promise<Parcel
+     currentStatus: "CREATED",
+     history: [{ status: "CREATED", timestamp: new Date().toISOString() }],
+   };
+-  store.set(trackingCode, parcel);
+-  scheduleAutoProgress(trackingCode);
++  putParcel(parcel);
++  if (MOCK_AUTO_PROGRESS) scheduleAutoProgress(trackingCode);
+   return structuredClone(parcel);
+ }
+ 
+ // ---- Lấy snapshot hiện tại (mock GET /api/public/track/:code) ----
+ export async function mockTrackParcel(trackingCode: string): Promise<Parcel | null> {
+   await delay(400);
+-  const p = store.get(trackingCode);
++  const p = getParcel(trackingCode);
+   return p ? structuredClone(p) : null;
+ }
+ 
+@@ -81,7 +138,7 @@ export async function mockTrackParcel(trackingCode: string): Promise<Parcel | nu
+ export async function mockListParcels(trackingCodes: string[]): Promise<Parcel[]> {
+   await delay(450);
+   const found = trackingCodes
+-    .map((code) => store.get(code))
++    .map((code) => getParcel(code))
+     .filter((p): p is Parcel => Boolean(p))
+     .map((p) => structuredClone(p));
+   // Mới tạo trước hiển thị trước
+@@ -94,14 +151,17 @@ export async function mockListParcels(trackingCodes: string[]): Promise<Parcel[]
+ }
+ 
+ // ---- Join room theo trackingCode (mock socket "join:parcel") ----
+-export function mockJoinRoom(trackingCode: string, cb: Listener): () => void {
++export function mockJoinRoom(trackingCode: string, cb: StatusListener): () => void {
+   if (!listenersByCode.has(trackingCode)) listenersByCode.set(trackingCode, new Set());
+   listenersByCode.get(trackingCode)!.add(cb);
+   return () => listenersByCode.get(trackingCode)?.delete(cb);
+ }
+ 
+-// ---- Giả lập tài xế/hệ thống tự động đẩy trạng thái tiếp theo mỗi vài giây ----
+-// Mục đích: cho phép bạn test UI real-time mà không cần chờ backend thật.
++// ---- Giả lập tự động đẩy trạng thái (chỉ để demo khách hàng KHI KHÔNG có tài xế) ----
++// Tắt mặc định từ khi có Driver UI: nếu bật, đơn tự chạy tới DELIVERED và tài xế
++// không còn gì để bấm. Đổi thành true nếu muốn demo nhanh chỉ với màn hình khách.
++export const MOCK_AUTO_PROGRESS = false;
++
+ function scheduleAutoProgress(trackingCode: string) {
+   const sequence: ParcelStatus[] = [
+     "PENDING_PICKUP",
+@@ -113,32 +173,92 @@ function scheduleAutoProgress(trackingCode: string) {
+   ];
+   let i = 0;
+   const tick = () => {
+-    const parcel = store.get(trackingCode);
++    const parcel = getParcel(trackingCode);
+     if (!parcel || i >= sequence.length) return;
+     const next = sequence[i];
+     if (!isValidTransition(parcel.currentStatus, next)) return; // an toàn: tôn trọng state machine
+-    parcel.currentStatus = next;
+-    parcel.history.push({ status: next, timestamp: new Date().toISOString() });
+-    store.set(trackingCode, parcel);
+-    emitUpdate(parcel);
++    applyTransition(parcel, next);
+     i += 1;
+     if (i < sequence.length) setTimeout(tick, 3500);
+   };
+   setTimeout(tick, 3500);
+ }
+ 
+-// ---- Cho phép thao tác thủ công từ UI demo (VD: nút "Giả lập giao thất bại") ----
++// ---- Nút demo trên trang tracking (đóng vai kho/điều phối) ----
+ export function mockForceTransition(trackingCode: string, to: ParcelStatus) {
+-  const parcel = store.get(trackingCode);
++  const parcel = getParcel(trackingCode);
+   if (!parcel) return;
+   if (!isValidTransition(parcel.currentStatus, to)) {
+     console.warn(`Transition không hợp lệ: ${parcel.currentStatus} -> ${to}`);
+     return;
+   }
+-  parcel.currentStatus = to;
+-  parcel.history.push({ status: to, timestamp: new Date().toISOString() });
+-  store.set(trackingCode, parcel);
+-  emitUpdate(parcel);
++  applyTransition(parcel, to);
++}
++
++// ================================================================
++// Driver (tài xế) — mock cho POST /auth/login, GET /api/parcels/assigned/mine,
++// PATCH /api/parcels/:id/status
++// ================================================================
++export const MOCK_DRIVER = {
++  email: "driver@demo.vn",
++  password: "123456",
++  token: "mock-driver-token",
++  user: { id: "mock-driver-1", fullName: "Nguyễn Văn Tài", email: "driver@demo.vn", role: "shipper" },
++};
++
++export async function mockDriverLogin(email: string, password: string): Promise<DriverSession> {
++  await delay(400);
++  if (email.trim().toLowerCase() !== MOCK_DRIVER.email || password !== MOCK_DRIVER.password) {
++    throw new Error("Email hoặc mật khẩu không đúng");
++  }
++  return { accessToken: MOCK_DRIVER.token, user: { ...MOCK_DRIVER.user } };
++}
++
++function assertMockToken(token: string) {
++  if (token !== MOCK_DRIVER.token) throw new AuthExpiredError();
++}
++
++// Mock coi mọi đơn đã qua bước "gán tài xế" (PENDING_PICKUP trở đi) và chưa kết
++// thúc là đơn được giao cho tài xế demo. Bước CREATED -> PENDING_PICKUP (điều phối
++// gán tài xế) làm bằng nút demo trên trang tracking.
++export async function mockListAssigned(token: string): Promise<DriverParcel[]> {
++  await delay(350);
++  assertMockToken(token);
++  return Object.values(loadStore())
++    .filter((p) => p.currentStatus !== "CREATED" && !TERMINAL_STATUSES.includes(p.currentStatus))
++    .sort((a, b) => (b.history[0]?.timestamp ?? "").localeCompare(a.history[0]?.timestamp ?? ""))
++    .map((p) => ({
++      id: p.trackingCode,
++      trackingCode: p.trackingCode,
++      receiverName: p.receiver.fullName,
++      receiverPhone: p.receiver.phone,
++      receiverAddress: `${p.receiver.addressLine}, ${p.receiver.province}`,
++      weightKg: p.packageInfo.weightKg,
++      currentStatus: p.currentStatus,
++    }));
++}
++
++// Áp đúng luật của backend: chỉ event dành cho shipper, đúng trạng thái hiện tại,
++// và guard (hasDeliveryProof) phải thỏa.
++export async function mockDriverUpdateStatus(
++  token: string,
++  id: string,
++  event: ShipperEvent,
++  context: { hasDeliveryProof?: boolean }
++): Promise<{ currentStatus: ParcelStatus }> {
++  await delay(300);
++  assertMockToken(token);
++  const parcel = getParcel(id);
++  if (!parcel) throw new Error(`Không tìm thấy đơn hàng với id ${id}`);
++  const action = SHIPPER_ACTIONS[parcel.currentStatus]?.find((a) => a.event === event);
++  if (!action) {
++    throw new Error(`Không tồn tại transition từ trạng thái '${parcel.currentStatus}' với event '${event}'`);
++  }
++  if (action.needsProof && context.hasDeliveryProof !== true) {
++    throw new Error("Điều kiện không thỏa mãn: Có bằng chứng giao (ảnh/chữ ký)");
++  }
++  applyTransition(parcel, action.to);
++  return { currentStatus: action.to };
+ }
+ 
+ function delay(ms: number) {
+diff --git a/Frontend/src/api/parcelApi.ts b/Frontend/src/api/parcelApi.ts
+index 81abec8..8b0345e 100644
+--- a/Frontend/src/api/parcelApi.ts
++++ b/Frontend/src/api/parcelApi.ts
+@@ -3,36 +3,26 @@ import {
+   CreateParcelRequest,
+   Parcel,
+   ParcelStatus,
++  ParcelStatusUpdate,
+   QuoteRequest,
+   QuoteResponse,
+   TERMINAL_STATUSES,
+ } from "../types/parcel";
+ import { mockCreateParcel, mockGetQuote, mockJoinRoom, mockListParcels, mockTrackParcel } from "./mockBackend";
+ import { getMyTrackingCodes } from "../lib/myOrders";
++import { applyStatusUpdate, isSnapshotFresh } from "../lib/parcelUpdates";
+ 
+ // ================================================================
+ // ĐỔI CHỖ NÀY khi backend thật (ParcelModule + TrackingGateway) sẵn sàng
+ // ================================================================
+-export const USE_MOCK = true;
+-export const API_BASE_URL = "http://localhost:3000"; // backend NestJS thật, không có global prefix (xem backend/src/main.ts)
+-export const SOCKET_URL = "http://localhost:3000"; // Socket.io server URL
+-
+-// Tuần 3: M2 mới có API PATCH status (REST), chưa có TrackingGateway
+-// (WebSocket) thật sự emit theo transition — nên TrackingPage tạm cập nhật
+-// bằng polling.
+-// Tuần 4: đổi thành "websocket" khi TrackingGateway (M2) đã emit đúng event
+-// join:parcel / parcel.status.updated. TrackingPage không cần sửa gì thêm
+-// vì đã tách qua subscribeToParcel().
+-//
+-// ⚠️ GHI CHÚ QUAN TRỌNG (đọc code backend thật ngày merge gần nhất):
+-// backend/src/tracking/tracking.gateway.ts hiện CHỈ có @SubscribeMessage('ping')
+-// trả về 'pong' — chưa có join room theo trackingCode, chưa emit
+-// parcel.status.updated khi StateMachineService transition. Vì vậy nếu đổi
+-// USE_MOCK=false lúc này, WebSocket sẽ connect được (ping/pong) nhưng sẽ
+-// KHÔNG nhận được cập nhật trạng thái thật cho tới khi M2 hoàn thiện gateway
+-// theo đúng checklist Tuần 4 của M2: "TrackingGateway, room management theo
+-// trackingCode" + "Trigger emit event mỗi khi StateMachineService validate
+-// transition thành công".
++// Có thể ghi đè bằng biến môi trường Vite (file .env.local, xem .env.example) mà không cần sửa code:
++//   VITE_USE_MOCK=false VITE_API_BASE_URL=http://localhost:3000 npm run dev
++export const USE_MOCK = import.meta.env.VITE_USE_MOCK !== "false";
++export const API_BASE_URL: string = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:3000"; // NestJS thật, không có global prefix
++export const SOCKET_URL: string = import.meta.env.VITE_SOCKET_URL ?? API_BASE_URL; // Socket.io server URL
++
++// "websocket": TrackingGateway (backend/src/tracking) phát `parcel.status.updated`
++// mỗi khi PATCH /api/parcels/:id/status thành công. "polling" là phương án dự phòng.
+ export const REALTIME_MODE: "polling" | "websocket" = "websocket";
+ export const POLLING_INTERVAL_MS = 4000;
+ // ================================================================
+@@ -121,14 +111,47 @@ function subscribeToParcelPolling(
+ }
+ 
+ // ---- Chế độ Tuần 4: WebSocket real-time (TrackingGateway) ----
++// Giữ 1 bản Parcel "nền" trong closure; mỗi event `parcel.status.updated` (chỉ là
++// bản vá: trạng thái mới + 1 mốc lịch sử) được ghép vào đó rồi đẩy lên UI.
+ function subscribeToParcelWebSocket(
+   trackingCode: string,
+   onUpdate: (parcel: Parcel) => void,
+   onConnectionChange?: (connected: boolean) => void
+ ): () => void {
++  let stopped = false;
++  let latest: Parcel | null = null;
++
++  // Lấy snapshot REST rồi đồng bộ lại. Gọi khi (re)connect để bù các event bị rớt
++  // lúc mất mạng, và khi nhận bản vá mà chưa có bản nền.
++  const resync = () =>
++    trackParcel(trackingCode)
++      .then((fresh) => {
++        if (stopped || !fresh || !isSnapshotFresh(fresh, latest)) return;
++        latest = fresh;
++        onUpdate(fresh);
++      })
++      .catch(() => {
++        /* giữ nguyên dữ liệu cũ trên UI nếu resync lỗi, không chặn luồng */
++      });
++
++  const handleStatus = (update: ParcelStatusUpdate) => {
++    if (stopped || update.trackingCode !== trackingCode) return;
++    if (!latest) {
++      void resync();
++      return;
++    }
++    latest = applyStatusUpdate(latest, update);
++    onUpdate(latest);
++  };
++
+   if (USE_MOCK) {
+     onConnectionChange?.(true);
+-    return mockJoinRoom(trackingCode, onUpdate);
++    const leave = mockJoinRoom(trackingCode, handleStatus);
++    void resync();
++    return () => {
++      stopped = true;
++      leave();
++    };
+   }
+ 
+   const socket: Socket = io(SOCKET_URL, {
+@@ -140,26 +163,22 @@ function subscribeToParcelWebSocket(
+     timeout: 5000,
+   });
+ 
+-  // Mỗi lần connect (lần đầu HOẶC sau khi tự reconnect), join lại room và
+-  // fetch lại snapshot mới nhất qua REST — tránh bị lệch dữ liệu nếu có
+-  // event bị rớt trong lúc mất kết nối (mất mạng giả lập theo DoD Tuần 4).
++  // Mỗi lần connect (lần đầu HOẶC sau khi tự reconnect) phải join lại room —
++  // server không nhớ room của socket cũ — rồi resync snapshot.
+   socket.on("connect", () => {
+     onConnectionChange?.(true);
+     socket.emit("join:parcel", { trackingCode });
+-    trackParcel(trackingCode)
+-      .then((fresh) => fresh && onUpdate(fresh))
+-      .catch(() => {
+-        /* giữ nguyên dữ liệu cũ trên UI nếu resync lỗi, không chặn luồng */
+-      });
++    void resync();
+   });
+ 
+   socket.on("disconnect", () => onConnectionChange?.(false));
+   socket.on("connect_error", () => onConnectionChange?.(false));
+ 
+-  socket.on("parcel.status.updated", (parcel: Parcel) => onUpdate(parcel));
+-  socket.on("parcel.delivery.completed", (parcel: Parcel) => onUpdate(parcel));
++  socket.on("parcel.status.updated", handleStatus);
++  socket.on("parcel.delivery.completed", handleStatus);
+ 
+   return () => {
++    stopped = true;
+     socket.emit("leave:parcel", { trackingCode });
+     socket.disconnect();
+   };
+diff --git a/Frontend/src/components/driver/DriverLoginPage.tsx b/Frontend/src/components/driver/DriverLoginPage.tsx
+new file mode 100644
+index 0000000..995b303
+--- /dev/null
++++ b/Frontend/src/components/driver/DriverLoginPage.tsx
+@@ -0,0 +1,75 @@
++import { useState } from "react";
++import { Navigate, useNavigate } from "react-router-dom";
++import { Field } from "../shared/Field";
++import { driverLogin } from "../../api/driverApi";
++import { USE_MOCK } from "../../api/parcelApi";
++import { MOCK_DRIVER } from "../../api/mockBackend";
++import { getDriverSession, saveDriverSession } from "../../lib/driverSession";
++
++export function DriverLoginPage() {
++  const navigate = useNavigate();
++  const [email, setEmail] = useState("");
++  const [password, setPassword] = useState("");
++  const [error, setError] = useState<string | null>(null);
++  const [submitting, setSubmitting] = useState(false);
++
++  if (getDriverSession()) return <Navigate to="/driver" replace />;
++
++  async function handleSubmit(e: React.FormEvent) {
++    e.preventDefault();
++    if (!email.trim() || !password) {
++      setError("Vui lòng nhập email và mật khẩu.");
++      return;
++    }
++    setSubmitting(true);
++    setError(null);
++    try {
++      saveDriverSession(await driverLogin(email.trim(), password));
++      navigate("/driver", { replace: true });
++    } catch (err) {
++      setError(err instanceof Error ? err.message : "Đăng nhập thất bại.");
++    } finally {
++      setSubmitting(false);
++    }
++  }
++
++  return (
++    <div className="paper-card driver-login">
++      <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, marginBottom: 16 }}>Đăng nhập tài xế</h3>
++      <form onSubmit={handleSubmit} noValidate>
++        <Field label="Email">
++          <input
++            type="email"
++            aria-label="Email"
++            autoComplete="username"
++            value={email}
++            onChange={(e) => setEmail(e.target.value)}
++            placeholder="tai.xe@example.com"
++          />
++        </Field>
++        <Field label="Mật khẩu">
++          <input
++            type="password"
++            aria-label="Mật khẩu"
++            autoComplete="current-password"
++            value={password}
++            onChange={(e) => setPassword(e.target.value)}
++          />
++        </Field>
++        {error && (
++          <div className="error" role="alert" style={{ marginBottom: 12 }}>
++            {error}
++          </div>
++        )}
++        <button className="btn btn-primary" type="submit" disabled={submitting}>
++          {submitting ? "Đang đăng nhập..." : "Đăng nhập"}
++        </button>
++      </form>
++      {USE_MOCK && (
++        <p className="muted" style={{ marginTop: 16 }}>
++          🧪 Chế độ mock — tài khoản demo: <b>{MOCK_DRIVER.email}</b> / <b>{MOCK_DRIVER.password}</b>
++        </p>
++      )}
++    </div>
++  );
++}
+diff --git a/Frontend/src/components/driver/DriverOrdersPage.tsx b/Frontend/src/components/driver/DriverOrdersPage.tsx
+new file mode 100644
+index 0000000..dd83699
+--- /dev/null
++++ b/Frontend/src/components/driver/DriverOrdersPage.tsx
+@@ -0,0 +1,114 @@
++import { useCallback, useEffect, useState } from "react";
++import { Navigate, useNavigate } from "react-router-dom";
++import { listAssignedParcels, updateParcelStatus } from "../../api/driverApi";
++import { AuthExpiredError } from "../../api/errors";
++import { DriverParcel, ShipperAction } from "../../types/driver";
++import { TERMINAL_STATUSES } from "../../types/parcel";
++import { clearDriverSession, getDriverSession } from "../../lib/driverSession";
++import { DriverParcelCard } from "./DriverParcelCard";
++
++const REFRESH_MS = 15000;
++
++// Danh sách mới từ server + giữ lại các đơn VỪA hoàn tất trong phiên này
++// (server không trả đơn đã kết thúc nữa, nhưng tài xế vẫn cần thấy kết quả).
++function mergeList(fresh: DriverParcel[], prev: DriverParcel[]): DriverParcel[] {
++  const ids = new Set(fresh.map((p) => p.id));
++  const keptDone = prev.filter((p) => TERMINAL_STATUSES.includes(p.currentStatus) && !ids.has(p.id));
++  return [...fresh, ...keptDone];
++}
++
++export function DriverOrdersPage() {
++  const navigate = useNavigate();
++  const session = getDriverSession();
++  const token = session?.accessToken;
++
++  const [parcels, setParcels] = useState<DriverParcel[] | null>(null);
++  const [loadError, setLoadError] = useState<string | null>(null);
++  const [busyId, setBusyId] = useState<string | null>(null);
++  const [rowError, setRowError] = useState<Record<string, string>>({});
++
++  const logout = useCallback(() => {
++    clearDriverSession();
++    navigate("/driver/login", { replace: true });
++  }, [navigate]);
++
++  const load = useCallback(async () => {
++    if (!token) return;
++    try {
++      const fresh = await listAssignedParcels(token);
++      setParcels((prev) => mergeList(fresh, prev ?? []));
++      setLoadError(null);
++    } catch (err) {
++      if (err instanceof AuthExpiredError) return logout();
++      setLoadError(err instanceof Error ? err.message : "Có lỗi xảy ra");
++    }
++  }, [token, logout]);
++
++  useEffect(() => {
++    void load();
++    const timer = setInterval(() => void load(), REFRESH_MS);
++    return () => clearInterval(timer);
++  }, [load]);
++
++  if (!session || !token) return <Navigate to="/driver/login" replace />;
++
++  async function handleAction(parcel: DriverParcel, action: ShipperAction, hasProof: boolean) {
++    setBusyId(parcel.id);
++    setRowError((e) => ({ ...e, [parcel.id]: "" }));
++    try {
++      const newStatus = await updateParcelStatus(token!, parcel, action, hasProof);
++      setParcels((list) => list?.map((p) => (p.id === parcel.id ? { ...p, currentStatus: newStatus } : p)) ?? list);
++    } catch (err) {
++      if (err instanceof AuthExpiredError) return logout();
++      setRowError((e) => ({ ...e, [parcel.id]: err instanceof Error ? err.message : "Có lỗi xảy ra" }));
++    } finally {
++      setBusyId(null);
++    }
++  }
++
++  return (
++    <div className="paper-card">
++      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 18 }}>
++        <div>
++          <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, margin: 0 }}>Đơn được giao</h3>
++          <div className="muted">Tài xế: {session.user.fullName}</div>
++        </div>
++        <div style={{ display: "flex", gap: 8 }}>
++          <button className="btn" onClick={() => void load()}>
++            Làm mới
++          </button>
++          <button className="btn" onClick={logout}>
++            Đăng xuất
++          </button>
++        </div>
++      </div>
++
++      {parcels === null && !loadError && <div className="muted">Đang tải danh sách đơn...</div>}
++      {loadError && (
++        <div className="error" role="alert">
++          {loadError}
++        </div>
++      )}
++
++      {parcels && parcels.length === 0 && (
++        <div className="orders-empty">
++          <p className="muted">Hiện chưa có đơn nào được giao cho bạn.</p>
++        </div>
++      )}
++
++      {parcels && parcels.length > 0 && (
++        <ul className="order-list">
++          {parcels.map((p) => (
++            <DriverParcelCard
++              key={p.id}
++              parcel={p}
++              busy={busyId === p.id}
++              error={rowError[p.id]}
++              onAction={handleAction}
++            />
++          ))}
++        </ul>
++      )}
++    </div>
++  );
++}
+diff --git a/Frontend/src/components/driver/DriverParcelCard.tsx b/Frontend/src/components/driver/DriverParcelCard.tsx
+new file mode 100644
+index 0000000..ac6b404
+--- /dev/null
++++ b/Frontend/src/components/driver/DriverParcelCard.tsx
+@@ -0,0 +1,76 @@
++import { useState } from "react";
++import { DriverParcel, SHIPPER_ACTIONS, ShipperAction, WAITING_NOTE } from "../../types/driver";
++import { ParcelStatus, STATUS_LABEL, TERMINAL_STATUSES } from "../../types/parcel";
++
++const WARN: ParcelStatus[] = ["DELIVERY_FAILED", "RETURNING", "RETURNED", "CANCELLED", "LOST"];
++
++function tone(status: ParcelStatus): "ok" | "warn" | "pending" {
++  if (status === "DELIVERED") return "ok";
++  return WARN.includes(status) ? "warn" : "pending";
++}
++
++interface Props {
++  parcel: DriverParcel;
++  busy: boolean;
++  error?: string;
++  onAction: (parcel: DriverParcel, action: ShipperAction, hasProof: boolean) => void;
++}
++
++export function DriverParcelCard({ parcel, busy, error, onAction }: Props) {
++  const [hasProof, setHasProof] = useState(false);
++  const actions = SHIPPER_ACTIONS[parcel.currentStatus] ?? [];
++  const needsProof = actions.some((a) => a.needsProof);
++  const finished = TERMINAL_STATUSES.includes(parcel.currentStatus);
++
++  return (
++    <li className="driver-card">
++      <div className="order-row-top">
++        <span className="order-code">{parcel.trackingCode}</span>
++        <span className={`status-chip status-${tone(parcel.currentStatus)}`}>{STATUS_LABEL[parcel.currentStatus]}</span>
++      </div>
++
++      <div className="order-row-mid">
++        Giao đến <b>{parcel.receiverName}</b> ·{" "}
++        <a href={`tel:${parcel.receiverPhone}`} className="driver-phone">
++          {parcel.receiverPhone}
++        </a>
++        <div className="muted">{parcel.receiverAddress}</div>
++        <div className="muted">Khối lượng: {parcel.weightKg} kg</div>
++      </div>
++
++      {needsProof && (
++        <label className="driver-proof">
++          <input type="checkbox" checked={hasProof} onChange={(e) => setHasProof(e.target.checked)} disabled={busy} />
++          Đã có bằng chứng giao hàng (ảnh / chữ ký người nhận)
++        </label>
++      )}
++
++      {actions.length > 0 && (
++        <div className="driver-actions">
++          {actions.map((a) => (
++            <button
++              key={a.event}
++              className={`btn ${a.tone === "primary" ? "btn-primary" : "btn-danger"}`}
++              disabled={busy || (a.needsProof && !hasProof)}
++              onClick={() => onAction(parcel, a, hasProof)}
++            >
++              {busy ? "Đang cập nhật..." : a.label}
++            </button>
++          ))}
++        </div>
++      )}
++
++      {actions.length === 0 && (
++        <div className="muted driver-wait">
++          {finished ? "✓ Đơn đã hoàn tất" : WAITING_NOTE[parcel.currentStatus] ?? "Chưa có thao tác dành cho tài xế"}
++        </div>
++      )}
++
++      {error && (
++        <div className="error" role="alert" style={{ marginTop: 8 }}>
++          {error}
++        </div>
++      )}
++    </li>
++  );
++}
+diff --git a/Frontend/src/components/tracking/TrackingPage.tsx b/Frontend/src/components/tracking/TrackingPage.tsx
+index a5dc608..4803cec 100644
+--- a/Frontend/src/components/tracking/TrackingPage.tsx
++++ b/Frontend/src/components/tracking/TrackingPage.tsx
+@@ -26,6 +26,10 @@ export function TrackingPage() {
+   useEffect(() => {
+     if (!code) return;
+     let cleanup: (() => void) | undefined;
++    // Cờ chống race: nếu effect bị dọn (đổi mã / unmount / StrictMode chạy 2 lần)
++    // trước khi trackParcel() trả về thì KHÔNG được mở subscription nữa, nếu không
++    // socket sẽ bị rò rỉ và nhận event trùng.
++    let cancelled = false;
+ 
+     setLoading(true);
+     setNotFound(false);
+@@ -34,6 +38,7 @@ export function TrackingPage() {
+     // 1. Lấy snapshot hiện tại (GET /api/public/track/:code)
+     trackParcel(code)
+       .then((p) => {
++        if (cancelled) return;
+         if (!p) {
+           setNotFound(true);
+           return;
+@@ -42,9 +47,14 @@ export function TrackingPage() {
+         // 2. Nhận cập nhật tiếp theo qua polling hoặc WebSocket (tùy REALTIME_MODE)
+         cleanup = subscribeToParcel(code, (updated) => setParcel(updated), setConnected);
+       })
+-      .finally(() => setLoading(false));
+-
+-    return () => cleanup?.();
++      .finally(() => {
++        if (!cancelled) setLoading(false);
++      });
++
++    return () => {
++      cancelled = true;
++      cleanup?.();
++    };
+   }, [code]);
+ 
+   function handleSearch(e: React.FormEvent) {
+diff --git a/Frontend/src/index.css b/Frontend/src/index.css
+index 051ae34..be4f630 100644
+--- a/Frontend/src/index.css
++++ b/Frontend/src/index.css
+@@ -494,6 +494,49 @@ body::before {
+   color: var(--warn-amber);
+ }
+ 
++.btn-danger {
++  background: rgba(255, 255, 255, 0.5);
++  border-color: var(--stamp-red-dark);
++  color: var(--stamp-red-dark);
++}
++
++.driver-login {
++  max-width: 420px;
++  margin: 0 auto;
++}
++
++.driver-card {
++  border: 1px solid rgba(255, 255, 255, 0.85);
++  border-radius: 12px;
++  background: rgba(255, 255, 255, 0.5);
++  padding: 14px 16px;
++}
++
++.driver-phone {
++  color: var(--ink);
++  font-family: var(--font-mono);
++  font-size: 13px;
++}
++
++.driver-proof {
++  display: flex;
++  align-items: center;
++  gap: 8px;
++  margin-top: 12px;
++  font-size: 13.5px;
++}
++
++.driver-actions {
++  display: flex;
++  flex-wrap: wrap;
++  gap: 10px;
++  margin-top: 12px;
++}
++
++.driver-wait {
++  margin-top: 12px;
++}
++
+ @media (max-width: 560px) {
+   .field-row {
+     grid-template-columns: 1fr;
+diff --git a/Frontend/src/lib/driverSession.ts b/Frontend/src/lib/driverSession.ts
+new file mode 100644
+index 0000000..e2660a9
+--- /dev/null
++++ b/Frontend/src/lib/driverSession.ts
+@@ -0,0 +1,30 @@
++import { DriverSession } from "../types/driver";
++
++const KEY = "lemail.driverSession";
++
++export function getDriverSession(): DriverSession | null {
++  try {
++    const raw = localStorage.getItem(KEY);
++    if (!raw) return null;
++    const s = JSON.parse(raw) as DriverSession;
++    return s?.accessToken && s?.user ? s : null;
++  } catch {
++    return null;
++  }
++}
++
++export function saveDriverSession(session: DriverSession): void {
++  try {
++    localStorage.setItem(KEY, JSON.stringify(session));
++  } catch {
++    // localStorage bị chặn: phiên chỉ sống trong state của trang
++  }
++}
++
++export function clearDriverSession(): void {
++  try {
++    localStorage.removeItem(KEY);
++  } catch {
++    // bỏ qua
++  }
++}
+diff --git a/Frontend/src/lib/parcelUpdates.ts b/Frontend/src/lib/parcelUpdates.ts
+new file mode 100644
+index 0000000..0b1d8d8
+--- /dev/null
++++ b/Frontend/src/lib/parcelUpdates.ts
+@@ -0,0 +1,25 @@
++import { Parcel, ParcelStatusUpdate } from "../types/parcel";
++
++// Ghép 1 bản vá realtime vào Parcel đang hiển thị. Idempotent: nhận trùng
++// cùng 1 event (VD: do resync sau reconnect) thì không thêm dòng lịch sử lần 2.
++export function applyStatusUpdate(parcel: Parcel, update: ParcelStatusUpdate): Parcel {
++  const dup = parcel.history.some(
++    (h) => h.status === update.event.status && h.timestamp === update.event.timestamp
++  );
++  return {
++    ...parcel,
++    currentStatus: update.currentStatus,
++    history: dup ? parcel.history : [...parcel.history, update.event],
++  };
++}
++
++function lastEventTime(p: Parcel): number {
++  const last = p.history[p.history.length - 1];
++  return last ? Date.parse(last.timestamp) : 0;
++}
++
++// Snapshot REST (sau reconnect) chỉ được ghi đè nếu không CŨ HƠN dữ liệu đang có,
++// tránh bị "lùi trạng thái" khi event realtime đến trước khi REST trả về.
++export function isSnapshotFresh(snapshot: Parcel, current: Parcel | null): boolean {
++  return !current || lastEventTime(snapshot) >= lastEventTime(current);
++}
+diff --git a/Frontend/src/types/driver.ts b/Frontend/src/types/driver.ts
+new file mode 100644
+index 0000000..2068950
+--- /dev/null
++++ b/Frontend/src/types/driver.ts
+@@ -0,0 +1,64 @@
++import { ParcelStatus } from "./parcel";
++
++export interface DriverUser {
++  id: string;
++  fullName: string;
++  email: string;
++  role: string;
++}
++
++export interface DriverSession {
++  accessToken: string;
++  user: DriverUser;
++}
++
++// Đơn trong danh sách của tài xế — field khớp model Parcel của backend
++// (GET /api/parcels/assigned/mine). weightKg là Decimal nên JSON ra dạng string.
++export interface DriverParcel {
++  id: string;
++  trackingCode: string;
++  receiverName: string;
++  receiverPhone: string;
++  receiverAddress: string;
++  weightKg: number | string;
++  currentStatus: ParcelStatus;
++}
++
++// Tên event gửi lên PATCH /api/parcels/:id/status — đúng TransitionEvent ở
++// backend/src/state-machine/state-machine.types.ts
++export type ShipperEvent =
++  | "confirm_pickup"
++  | "depart_to_hub"
++  | "confirm_delivery"
++  | "report_failed_delivery"
++  | "confirm_return_to_sender";
++
++export interface ShipperAction {
++  event: ShipperEvent;
++  to: ParcelStatus;
++  label: string;
++  tone: "primary" | "danger";
++  // Guard của state machine mà UI phải xác nhận với tài xế trước khi gửi
++  needsProof?: boolean;
++}
++
++// Những transition mà actor 'shipper' ĐƯỢC PHÉP làm — rút từ TRANSITION_TABLE
++// (allowedActors có 'shipper'). Các bước còn lại do kho/điều phối/hệ thống làm.
++export const SHIPPER_ACTIONS: Partial<Record<ParcelStatus, ShipperAction[]>> = {
++  PENDING_PICKUP: [{ event: "confirm_pickup", to: "PICKED_UP", label: "Đã lấy hàng", tone: "primary" }],
++  PICKED_UP: [{ event: "depart_to_hub", to: "IN_TRANSIT", label: "Xuất phát về hub", tone: "primary" }],
++  OUT_FOR_DELIVERY: [
++    { event: "confirm_delivery", to: "DELIVERED", label: "Giao thành công", tone: "primary", needsProof: true },
++    { event: "report_failed_delivery", to: "DELIVERY_FAILED", label: "Giao thất bại", tone: "danger" },
++  ],
++  RETURNING: [
++    { event: "confirm_return_to_sender", to: "RETURNED", label: "Đã trả về người gửi", tone: "primary" },
++  ],
++};
++
++// Trạng thái mà tài xế chưa phải làm gì — hiển thị lý do chờ
++export const WAITING_NOTE: Partial<Record<ParcelStatus, string>> = {
++  IN_TRANSIT: "Đang trung chuyển — chờ nhân viên kho quét tại hub",
++  AT_HUB: "Đang ở hub — chờ điều phối giao chặng cuối",
++  DELIVERY_FAILED: "Chờ hệ thống lên lịch giao lại",
++};
+diff --git a/Frontend/src/types/parcel.ts b/Frontend/src/types/parcel.ts
+index d31aaba..62a2f08 100644
+--- a/Frontend/src/types/parcel.ts
++++ b/Frontend/src/types/parcel.ts
+@@ -116,3 +116,13 @@ export interface Parcel {
+   currentStatus: ParcelStatus;
+   history: ParcelEvent[];
+ }
++
++// Payload event WebSocket `parcel.status.updated` / `parcel.delivery.completed`
++// (khớp ParcelStatusUpdatePayload ở backend/src/tracking/tracking.gateway.ts).
++// Chỉ là "bản vá" (trạng thái mới + 1 mốc lịch sử), client tự ghép vào Parcel
++// đang hiển thị — backend không cần dựng lại cả Parcel của Frontend.
++export interface ParcelStatusUpdate {
++  trackingCode: string;
++  currentStatus: ParcelStatus;
++  event: ParcelEvent;
++}
+-- 
+2.43.0
+

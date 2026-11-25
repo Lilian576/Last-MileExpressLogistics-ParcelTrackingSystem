@@ -79,7 +79,8 @@ export interface BackendParcel {
   weightKg: number | string;
   currentStatus: ParcelStatus;
   createdAt: string;
-  fee?: number;
+  fee?: number | null;
+  feeVnd?: number | null;
   statusHistory?: { status: ParcelStatus; createdAt: string; note?: string | null }[];
 }
 
@@ -107,7 +108,7 @@ export function fromBackendParcel(p: BackendParcel, senderName = ""): Parcel {
     sender: { fullName: senderName, phone: "", addressLine: "", province: "" },
     receiver: { fullName: p.receiverName, phone: p.receiverPhone, addressLine, province },
     packageInfo: { weightKg: Number(p.weightKg), lengthCm: 0, widthCm: 0, heightCm: 0, category: "OTHER" },
-    feeVnd: p.fee ?? 0, // backend chưa lưu phí vào DB (xem báo cáo, việc của M2) -> 0 = chưa biết
+    feeVnd: p.feeVnd ?? p.fee ?? 0,
     currentStatus: p.currentStatus,
     history,
   };
