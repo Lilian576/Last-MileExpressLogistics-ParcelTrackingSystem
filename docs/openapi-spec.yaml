@@ -1,11 +1,10 @@
 openapi: 3.1.0
 info:
   title: LeMail Parcel Tracking API
-  version: 2026-11-25-m3
+  version: 2026-11-25-m3-api-sync
   description: >-
-    D01-D03 handoff against main 8b61f25. Paths describe current controllers. Missing object permissions and
-    planned B03 webhook are explicitly marked. New D01 DB columns remain nullable until B01 connects write
-    DTOs. See INTEGRATION.md.
+    Contract synchronized with develop a230451, including hub selection, server-derived guards, persisted GPS
+    and ParcelNotifierService. Acceptance results and release SHA/tag are pending M4 and the release owner.
 servers:
   - url: http://localhost:3000
     description: Local backend, override for deployment.
@@ -84,8 +83,8 @@ paths:
         - Parcels
       operationId: calculateFee
       description: >-
-        Existing endpoint. Main uses a TypeScript interface, so runtime range validation is still B01 work.
-        Base 15000 + 5000/kg + 1000/km Haversine, rounded to VND.
+        Public validated quote. Weight is between 0 and 1000 kg, latitude between -90 and 90, longitude
+        between -180 and 180. Fee is 15000 + 5000/kg + 1000/km Haversine, rounded to VND.
       requestBody:
         required: true
         content:
@@ -115,6 +114,8 @@ paths:
                   - fee
                   - currency
                   - details
+        '400':
+          $ref: '#/components/responses/Error400'
         '429':
           $ref: '#/components/responses/Error429'
       summary: Calculate a VND shipping quote
@@ -126,8 +127,8 @@ paths:
       security:
         - bearerAuth: []
       description: >-
-        Sender ID comes from JWT. Main returns calculated fee but does not yet persist feeVnd or coordinates.
-        B01 must connect D01 columns.
+        Customer role only. Sender ID is taken from JWT. Persists quote, coordinates, dimensions and CREATED
+        history, then notifies after successful write. Returns feeVnd plus the compatibility fee field.
       requestBody:
         required: true
         content:
@@ -152,6 +153,8 @@ paths:
           $ref: '#/components/responses/Error400'
         '401':
           $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
         '429':
           $ref: '#/components/responses/Error429'
       summary: Create a parcel
@@ -159,10 +162,7 @@ paths:
       tags:
         - Parcels
       operationId: listParcels
-      description: Current main has no guard. B02 must restrict this internal list to authorized staff before release.
-      x-required-permissions:
-        - warehouse_staff
-        - admin
+      description: JWT and RolesGuard restrict the internal parcel list to admin and warehouse_staff.
       responses:
         '200':
           description: Internal parcel list
@@ -172,9 +172,15 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Parcel'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
         '429':
           $ref: '#/components/responses/Error429'
       summary: List internal parcels
+      security:
+        - bearerAuth: []
   /api/parcels/mine:
     get:
       tags:
@@ -240,25 +246,24 @@ paths:
             type: string
             description: Internal parcel ID
       description: >-
-        Current main has no guard or not-found exception. B02 must check owner/assignment/staff. Missing ID
-        currently returns null with 200.
-      x-required-permissions:
-        - owner
-        - assigned shipper
-        - warehouse_staff
-        - admin
+        Authenticated owner, actively assigned shipper, admin or warehouse_staff may read. Missing or
+        unauthorized parcel returns 404 to avoid disclosing its existence.
       responses:
         '200':
           description: Parcel or null
           content:
             application/json:
               schema:
-                anyOf:
-                  - $ref: '#/components/schemas/Parcel'
-                  - type: 'null'
+                $ref: '#/components/schemas/Parcel'
+        '401':
+          $ref: '#/components/responses/Error401'
+        '404':
+          $ref: '#/components/responses/Error404'
         '429':
           $ref: '#/components/responses/Error429'
       summary: Read an internal parcel
+      security:
+        - bearerAuth: []
   /api/parcels/{id}/status:
     patch:
       tags:
@@ -274,15 +279,33 @@ paths:
             type: string
             description: Internal parcel ID
       description: >-
-        Actor comes from JWT. ASSIGN_COURIER is rejected here. Current DTO still accepts client flags; B01/B02
-        must read guards from DB and persist assignment effects. M3 allows admin DISPATCH_LAST_MILE at the
-        final hub.
+        Actor is derived from JWT; admin maps to dispatcher. Owner/active courier assignment, hub type, final
+        hub and failed-attempt count are read from the database. For arrive_at_hub, warehouse_staff supplies
+        hubId of an existing hub. For confirm_delivery, the assigned shipper supplies a non-blank
+        deliveryProofRef (maximum 200 characters); the current service trims and stores this reference as
+        deliveryProof, without verifying image content, a signature or OTP. Other events do not require those
+        fields. assign_courier must use its dedicated endpoint. All writes commit before notification.
       requestBody:
         required: true
         content:
           application/json:
             schema:
               $ref: '#/components/schemas/UpdateStatusRequest'
+            examples:
+              arriveAtHub:
+                summary: Warehouse receives at a hub
+                value:
+                  event: arrive_at_hub
+                  hubId: demo-hub-q7
+              dispatchLastMile:
+                summary: Admin dispatches from the destination hub
+                value:
+                  event: dispatch_last_mile
+              confirmDelivery:
+                summary: Assigned courier supplies an evidence reference
+                value:
+                  event: confirm_delivery
+                  deliveryProofRef: demo-evidence-reference
       responses:
         '200':
           description: Updated parcel
@@ -298,6 +321,8 @@ paths:
           $ref: '#/components/responses/Error403'
         '404':
           $ref: '#/components/responses/Error404'
+        '409':
+          $ref: '#/components/responses/Error409'
         '429':
           $ref: '#/components/responses/Error429'
       summary: Apply a lifecycle event
@@ -316,22 +341,29 @@ paths:
             type: string
             description: Internal parcel ID
       description: >-
-        CREATE to PENDING_PICKUP using Serializable transaction. Admin is MVP dispatcher. No free courier
-        rejects transaction with 400. Serialization conflict is 409.
+        Admin only. destinationHubId chooses an existing Location of type hub and is stored as
+        destinationLocationId. If omitted, the existing destinationLocationId is reused; missing or invalid
+        hub returns 400. Uses both stored sender coordinates when present. pickupLat and pickupLng are
+        fallback inputs only for legacy parcels missing either stored sender coordinate; both fallback values
+        are then required. No free courier or concurrent write returns 409. Transaction commits before
+        notification.
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
-              properties:
-                pickupLat:
-                  type: number
-                pickupLng:
-                  type: number
-              required:
-                - pickupLat
-                - pickupLng
+              $ref: '#/components/schemas/AssignCourierRequest'
+            examples:
+              storedCoordinates:
+                summary: New parcel with stored sender coordinates
+                value:
+                  destinationHubId: demo-hub-q7
+              legacyCoordinates:
+                summary: Legacy parcel without stored pickup coordinates
+                value:
+                  destinationHubId: demo-hub-q7
+                  pickupLat: 10.7292
+                  pickupLng: 106.6935
       responses:
         '200':
           description: Parcel and assignment
@@ -354,18 +386,6 @@ paths:
                             type: string
                           fullName:
                             type: string
-                          currentLatitude:
-                            oneOf:
-                              - type: string
-                                pattern: ^-?[0-9]+(.[0-9]+)?$
-                              - type: number
-                            description: Prisma Decimal is normally serialized as a JSON string.
-                          currentLongitude:
-                            oneOf:
-                              - type: string
-                                pattern: ^-?[0-9]+(.[0-9]+)?$
-                              - type: number
-                            description: Prisma Decimal is normally serialized as a JSON string.
                         required:
                           - id
                           - fullName
@@ -406,8 +426,9 @@ paths:
           schema:
             type: string
       description: >-
-        Current snapshot uses raw status and receiverName. Excludes phone/address and delivery proof. B02 owns
-        further minimization of internal notes/status.
+        Public snapshot with raw ParcelStatus, receiverName and timeline. Excludes phone/address, actors and
+        delivery proof. location is the last persisted driver position or null. REST and socket use the same
+        location format.
       responses:
         '200':
           description: Public timeline
@@ -415,20 +436,79 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/PublicTracking'
+              examples:
+                noLocation:
+                  summary: No driver position yet
+                  value:
+                    trackingCode: PCL123
+                    currentStatus: CREATED
+                    receiverName: Demo receiver
+                    history:
+                      - status: CREATED
+                        timestamp: '2026-11-25T03:00:00.000Z'
+                    location: null
+                withLocation:
+                  summary: Last persisted driver position
+                  value:
+                    trackingCode: PCL123
+                    currentStatus: OUT_FOR_DELIVERY
+                    receiverName: Demo receiver
+                    history:
+                      - status: OUT_FOR_DELIVERY
+                        timestamp: '2026-11-25T03:05:00.000Z'
+                    location:
+                      trackingCode: PCL123
+                      latitude: 10.7292
+                      longitude: 106.6935
+                      timestamp: '2026-11-25T03:06:00.000Z'
         '404':
           $ref: '#/components/responses/Error404'
         '429':
           $ref: '#/components/responses/Error429'
       summary: Read a public tracking timeline
+  /api/parcels/hubs:
+    get:
+      tags:
+        - Parcels
+      operationId: listHubs
+      summary: List hubs for operations
+      security:
+        - bearerAuth: []
+      description: >-
+        RolesGuard permits admin and warehouse_staff. Returns only locations of type hub, selecting
+        id/name/address and sorting by name ascending.
+      responses:
+        '200':
+          description: Available hubs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Hub'
+              example:
+                - id: demo-hub-q7
+                  name: Hub Quận 7
+                  address: Quận 7, TP.HCM
+        '401':
+          $ref: '#/components/responses/Error401'
+        '403':
+          $ref: '#/components/responses/Error403'
+        '429':
+          $ref: '#/components/responses/Error429'
 webhooks:
   parcelStatusUpdated:
     post:
       operationId: receiveParcelStatusWebhook
-      x-implementation-status: B03 planned, HTTP sender not implemented on main
       description: >-
-        M2 handoff. Server POSTs to PARCEL_WEBHOOK_URL after DB commit. Stable eventId across retry.
-        HMAC-SHA256 over timestamp + "." + exact raw JSON body. Receiver rejects replay/outside 300s,
-        acknowledges with 2xx. Timeout/non-2xx logs delivery failure without rolling back parcel.
+        Implemented by backend/src/parcels/parcel-notifier.service.ts. Optional delivery to PARCEL_WEBHOOK_URL
+        after commit. eventId is the committed history ID, occurredAt equals data.event.timestamp. HMAC-SHA256
+        covers X-Webhook-Timestamp + "." + exact raw JSON body serialized by JSON.stringify. X-Webhook-Id
+        equals eventId, signature is sha256=<lowercase hex>. Fetch timeout is fixed at 2000 ms, redirects are
+        rejected. Receiver non-2xx and transport errors are logged without rolling back the parcel or failing
+        its successful REST response. Current implementation attempts once and has no automatic retry or
+        durable outbox. The receiver should verify signature in constant time, enforce a timestamp window and
+        deduplicate eventId.
       parameters:
         - name: X-Webhook-Id
           in: header
@@ -453,6 +533,16 @@ webhooks:
           application/json:
             schema:
               $ref: '#/components/schemas/ParcelStatusWebhook'
+            example:
+              eventId: history-demo-001
+              type: parcel.status.updated
+              occurredAt: '2026-11-25T03:00:00.000Z'
+              data:
+                trackingCode: PCL123
+                currentStatus: DELIVERED
+                event:
+                  status: DELIVERED
+                  timestamp: '2026-11-25T03:00:00.000Z'
       responses:
         '204':
           description: Receiver accepted the event
@@ -540,14 +630,24 @@ components:
       properties:
         weightKg:
           type: number
+          minimum: 0
+          maximum: 1000
         senderLat:
           type: number
+          minimum: -90
+          maximum: 90
         senderLng:
           type: number
+          minimum: -180
+          maximum: 180
         receiverLat:
           type: number
+          minimum: -90
+          maximum: 90
         receiverLng:
           type: number
+          minimum: -180
+          maximum: 180
       required:
         - weightKg
         - senderLat
@@ -568,6 +668,8 @@ components:
             receiverAddress:
               type: string
               minLength: 1
+            dimensions:
+              type: string
           required:
             - receiverName
             - receiverPhone
@@ -592,50 +694,101 @@ components:
             - retry_delivery
             - max_retries_reached
             - confirm_return_to_sender
-        hasAvailableCourier:
-          type: boolean
-          deprecated: true
+        hubId:
+          type: string
+          minLength: 1
           description: >-
-            Legacy main DTO. B02 must derive trusted guard data from DB instead of accepting this flag as
-            proof.
-        isAssignedCourier:
-          type: boolean
-          deprecated: true
+            Existing hub ID. Required for arrive_at_hub; server loads Location.type and current/destination
+            hub IDs.
+        deliveryProofRef:
+          type: string
+          maxLength: 200
           description: >-
-            Legacy main DTO. B02 must derive trusted guard data from DB instead of accepting this flag as
-            proof.
-        isHubLocation:
-          type: boolean
-          deprecated: true
-          description: >-
-            Legacy main DTO. B02 must derive trusted guard data from DB instead of accepting this flag as
-            proof.
-        isFinalHub:
-          type: boolean
-          deprecated: true
-          description: >-
-            Legacy main DTO. B02 must derive trusted guard data from DB instead of accepting this flag as
-            proof.
-        hasDeliveryProof:
-          type: boolean
-          deprecated: true
-          description: >-
-            Legacy main DTO. B02 must derive trusted guard data from DB instead of accepting this flag as
-            proof.
-        hoursSinceLastUpdate:
-          type: number
-          deprecated: true
-          description: Legacy main DTO. Not trusted authorization or persisted evidence.
-        failedAttemptCount:
-          type: number
-          deprecated: true
-          description: Legacy main DTO. Not trusted authorization or persisted evidence.
-        maxRetryAttempts:
-          type: number
-          deprecated: true
-          description: Legacy main DTO. Not trusted authorization or persisted evidence.
+            Non-blank after trimming for confirm_delivery. Stored in Parcel.deliveryProof. An evidence
+            reference only; no image/OTP verification is currently performed.
       required:
         - event
+      allOf:
+        - if:
+            properties:
+              event:
+                const: arrive_at_hub
+            required:
+              - event
+          then:
+            required:
+              - hubId
+            properties:
+              event:
+                type: string
+                enum:
+                  - create_parcel
+                  - assign_courier
+                  - cancel_order
+                  - confirm_pickup
+                  - depart_to_hub
+                  - arrive_at_hub
+                  - dispatch_to_next_hub
+                  - dispatch_last_mile
+                  - sla_timeout
+                  - confirm_delivery
+                  - report_failed_delivery
+                  - retry_delivery
+                  - max_retries_reached
+                  - confirm_return_to_sender
+              hubId:
+                type: string
+                minLength: 1
+                description: >-
+                  Existing hub ID. Required for arrive_at_hub; server loads Location.type and
+                  current/destination hub IDs.
+              deliveryProofRef:
+                type: string
+                maxLength: 200
+                description: >-
+                  Non-blank after trimming for confirm_delivery. Stored in Parcel.deliveryProof. An evidence
+                  reference only; no image/OTP verification is currently performed.
+        - if:
+            properties:
+              event:
+                const: confirm_delivery
+            required:
+              - event
+          then:
+            required:
+              - deliveryProofRef
+            properties:
+              event:
+                type: string
+                enum:
+                  - create_parcel
+                  - assign_courier
+                  - cancel_order
+                  - confirm_pickup
+                  - depart_to_hub
+                  - arrive_at_hub
+                  - dispatch_to_next_hub
+                  - dispatch_last_mile
+                  - sla_timeout
+                  - confirm_delivery
+                  - report_failed_delivery
+                  - retry_delivery
+                  - max_retries_reached
+                  - confirm_return_to_sender
+              hubId:
+                type: string
+                minLength: 1
+                description: >-
+                  Existing hub ID. Required for arrive_at_hub; server loads Location.type and
+                  current/destination hub IDs.
+              deliveryProofRef:
+                type: string
+                maxLength: 200
+                description: >-
+                  Non-blank after trimming for confirm_delivery. Stored in Parcel.deliveryProof. An evidence
+                  reference only; no image/OTP verification is currently performed.
+                minLength: 1
+                pattern: \S
     Parcel:
       type: object
       properties:
@@ -696,7 +849,7 @@ components:
             - integer
             - 'null'
           minimum: 0
-          description: D01 column, B01 still needs to write this at creation. Null means unknown legacy fee.
+          description: Persisted quote in integer VND for new parcels. Null means unknown legacy fee.
         senderLat:
           anyOf:
             - oneOf:
@@ -732,9 +885,32 @@ components:
         deliveryProof:
           anyOf:
             - type: string
-              description: Internal evidence reference. B01 validation and write pending. Never publish on tracking.
+              description: >-
+                Stored trimmed deliveryProofRef from confirm_delivery. Evidence content is not verified by the
+                current service. Internal only.
             - type: 'null'
         deliveredAt:
+          anyOf:
+            - type: string
+              format: date-time
+            - type: 'null'
+        driverLatitude:
+          anyOf:
+            - oneOf:
+                - type: string
+                  pattern: ^-?[0-9]+(.[0-9]+)?$
+                - type: number
+              description: Prisma Decimal is normally serialized as a JSON string.
+            - type: 'null'
+        driverLongitude:
+          anyOf:
+            - oneOf:
+                - type: string
+                  pattern: ^-?[0-9]+(.[0-9]+)?$
+                - type: number
+              description: Prisma Decimal is normally serialized as a JSON string.
+            - type: 'null'
+        driverLocationAt:
           anyOf:
             - type: string
               format: date-time
@@ -846,11 +1022,19 @@ components:
             required:
               - status
               - timestamp
+        location:
+          anyOf:
+            - $ref: '#/components/schemas/ParcelLocationUpdated'
+            - type: 'null'
+          description: >-
+            Last persisted driver position. Null when no complete position/timestamp exists, including after
+            last-mile dispatch clears the previous position.
       required:
         - trackingCode
         - currentStatus
         - receiverName
         - history
+        - location
     ParcelStatusUpdated:
       type: object
       properties:
@@ -901,11 +1085,13 @@ components:
       properties:
         eventId:
           type: string
+          description: Committed ParcelStatusHistory.id, also sent in X-Webhook-Id.
         type:
           const: parcel.status.updated
         occurredAt:
           type: string
           format: date-time
+          description: Exact data.event.timestamp from the committed history row.
         data:
           $ref: '#/components/schemas/ParcelStatusUpdated'
       required:
@@ -929,6 +1115,41 @@ components:
       required:
         - statusCode
         - message
+    AssignCourierRequest:
+      type: object
+      description: >-
+        Fields are optional at DTO level; service requires a valid destination hub from the request or saved
+        parcel. Both pickup coordinates are required when the parcel lacks a complete stored coordinate pair.
+      properties:
+        destinationHubId:
+          type: string
+          minLength: 1
+          description: >-
+            Hub selected by admin, saved as destinationLocationId. May be omitted only if the parcel already
+            has a valid destination hub.
+        pickupLat:
+          type: number
+          minimum: -90
+          maximum: 90
+          description: Legacy fallback latitude, used with pickupLng only when stored sender coordinates are incomplete.
+        pickupLng:
+          type: number
+          minimum: -180
+          maximum: 180
+          description: Legacy fallback longitude, used with pickupLat only when stored sender coordinates are incomplete.
+    Hub:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        address:
+          type: string
+      required:
+        - id
+        - name
+        - address
   responses:
     Error400:
       description: Invalid input or transition
@@ -986,7 +1207,6 @@ x-socketio:
       trackingCode: PCL123
       latitude: 10.7292
       longitude: 106.6935
-      token: <JWT>
   serverEvents:
     parcel.status.updated:
       $ref: '#/components/schemas/ParcelStatusUpdated'
@@ -994,4 +1214,11 @@ x-socketio:
       $ref: '#/components/schemas/ParcelStatusUpdated'
     parcel.location.updated:
       $ref: '#/components/schemas/ParcelLocationUpdated'
-  description: See INTEGRATION.md. Main does not yet authenticate/persist GPS; B02 required.
+  description: >-
+    Default namespace and parcel:{trackingCode} rooms. Driver GPS requires JWT in handshake auth.token, active
+    shipper assignment and valid coordinates; persists location before emit. Subscribe/reconnect/resync
+    details in INTEGRATION.md.
+  driverAuthentication:
+    handshake:
+      auth:
+        token: <JWT>

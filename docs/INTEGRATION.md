@@ -1,121 +1,184 @@
 # Hợp đồng tích hợp cuối kỳ
 
-Bản bàn giao M3 ngày 25/11/2026, đối chiếu main tại commit 8b61f25 và kế hoạch D01–D03. Tài liệu tách phần đang chạy với phần M2 cần tích hợp. OpenAPI nằm tại [openapi-spec.yaml](openapi-spec.yaml), bảng quyền tại [m3.md](m3.md).
+Đối chiếu develop a230451 ngày 25/11/2026 sau PR #34. OpenAPI tại [openapi-spec.yaml](openapi-spec.yaml). Payload bên dưới lấy từ DTO, ParcelsService, TrackingGateway và ParcelNotifierService của cùng mốc. Kết quả nghiệm thu và SHA/tag nộp cuối chờ Liêm cùng người chốt release xác nhận.
 
-## REST đang có trên main
+## REST và quyền
 
-| Method | Route | Hành vi hiện tại |
+| Method | Route | Hành vi |
 |---|---|---|
-| POST | /auth/register | 201, luôn tạo customer, bỏ role do client gửi |
+| POST | /auth/register | 201, luôn tạo customer |
 | POST | /auth/login | 200, trả accessToken và user |
-| POST | /api/parcels/calculate-fee | Công khai, trả fee số nguyên VND, currency, details.weightKg |
-| POST | /api/parcels | JWT, senderId lấy từ danh tính đăng nhập |
-| GET | /api/parcels/mine | JWT, chỉ lấy senderId của người gọi |
-| GET | /api/parcels/assigned/mine | JWT và role shipper |
-| GET | /api/public/track/{code} | Công khai, mã không tồn tại trả 404 |
-| GET | /api/parcels | Hiện thiếu guard. B02 phải giới hạn nhân sự |
-| GET | /api/parcels/{id} | Hiện thiếu guard. B02 phải kiểm quyền sở hữu/assignment |
-| PATCH | /api/parcels/{id}/status | JWT, nhận event; code hiện còn tin các cờ guard từ client |
-| PATCH | /api/parcels/{id}/assign-courier | JWT, nhận pickupLat/pickupLng, assignment + status + history trong transaction |
+| POST | /api/parcels/calculate-fee | Công khai, validate trọng lượng 0–1000 kg và tọa độ, trả fee/currency/details |
+| POST | /api/parcels | JWT customer, lưu phí và tọa độ, senderId lấy từ JWT |
+| GET | /api/parcels/mine | JWT, lọc senderId của người gọi |
+| GET | /api/parcels/assigned/mine | JWT shipper, assignment đang hoạt động |
+| GET | /api/parcels/hubs | JWT admin hoặc warehouse_staff, danh sách hub |
+| GET | /api/parcels | JWT admin hoặc warehouse_staff |
+| GET | /api/parcels/{id} | JWT, chủ đơn/tài xế đang được gán/nhân sự, trả 404 nếu thiếu hoặc không có quyền |
+| GET | /api/public/track/{code} | Công khai, 404 khi mã không tồn tại |
+| PATCH | /api/parcels/{id}/assign-courier | JWT admin, chọn hub đích và gán pickup |
+| PATCH | /api/parcels/{id}/status | JWT, role và guard từ danh tính/DB |
 
-Backend chưa có /quote. M1 đang dùng /calculate-fee. Các input và response dùng camelCase. Các giá trị Decimal trong response Prisma hiện được JSON hóa thành chuỗi. M1 chuyển số một lần trong adapter. Lỗi Nest thường có statusCode, message, error. 400 cho input/transition, 401 cho JWT/login, 403 cho role, 404 cho mã tracking, 409 cho duplicate hoặc transaction conflict, 429 cho quota.
+Không có /quote. M1 gọi /calculate-fee. JSON dùng camelCase. Prisma Decimal thường trả chuỗi, adapter chuyển một lần sang number. Lỗi gồm 400 input/transition/hub không hợp lệ, 401 xác thực, 403 sai actor/assignment, 404 không tìm thấy hoặc không được xem, 409 không có tài xế rảnh/cập nhật chồng nhau, 429 quota.
 
-## D01 dữ liệu phí, tọa độ và xác nhận giao
+## Chọn hub và gán tài xế
 
-Migration 20261125000000_parcel_delivery_contract thêm vào Parcel các trường sau, tất cả nullable để giữ nguyên dữ liệu cũ.
+GET /api/parcels/hubs chỉ trả Location.type=hub, chọn id/name/address và sắp tăng dần theo name. Admin và warehouse_staff được gọi.
 
-| Prisma / JSON | PostgreSQL | Quy tắc bàn giao B01/F01 |
-|---|---|---|
-| feeVnd | fee_vnd INTEGER | Phí VND đã tính lúc tạo, số nguyên không âm |
-| senderLat / senderLng | sender_lat / sender_lng NUMERIC(9,6) | Tọa độ lấy hàng, trong [-90,90] / [-180,180] |
-| receiverLat / receiverLng | receiver_lat / receiver_lng NUMERIC(9,6) | Tọa độ đích, cùng giới hạn |
-| deliveryProof | delivery_proof TEXT | Tham chiếu ảnh/chữ ký đã được backend kiểm tra, chỉ API nội bộ |
-| deliveredAt | delivered_at TIMESTAMP(3) | UTC, do server ghi khi xác nhận giao thành công |
+```json
+[
+  { "id": "demo-hub-q7", "name": "Hub Quận 7", "address": "Quận 7, TP.HCM" }
+]
+```
 
-Tên feeVnd giữ theo frontend hiện có. B01 cần ghi bốn tọa độ và feeVnd trong create(), trả thêm fee để tương thích caller cũ nếu cần. Với parcel cũ có NULL, UI hiện “Chưa có dữ liệu”. Không thay NULL bằng 0 hoặc tính lại theo giá hiện tại. Thiếu tọa độ điều phối phải yêu cầu nhân sự bổ sung trước khi gán. Migration không thay đổi trạng thái, phí hoặc lịch sử của đơn cũ.
+Admin gán đơn mới đã có senderLat/senderLng bằng PATCH /api/parcels/{id}/assign-courier.
 
-Xác nhận giao MVP đề xuất dùng event=confirm_delivery và deliveryProof là tham chiếu ảnh/chữ ký. B01 sở hữu DTO, kiểm tra tham chiếu, lưu deliveryProof/deliveredAt và history trong cùng transaction. hasDeliveryProof trong TransitionContext phải được server suy ra sau bước kiểm tra này. Checkbox hoặc boolean do client gửi không phải bằng chứng đã lưu. Schema mới chuẩn bị cột, API main chưa ghi các cột đó.
+```json
+{ "destinationHubId": "demo-hub-q7" }
+```
 
-## Assignment và actor
+destinationHubId phải là hub có thật và được lưu vào Parcel.destinationLocationId. Nếu bỏ trường này, service dùng destinationLocationId đã lưu. Không có hub hợp lệ thì trả 400 “Chọn hub phụ trách giao hàng”.
 
-Admin kiêm điều phối trong MVP. JWT role admin đi vào StateMachineService dưới actor admin, được assign_courier và dispatch_last_mile. Dispatcher là actor tương thích thiết kế cũ, không có tài khoản/Role Prisma. System chỉ dùng trong job của backend. Không nhận actor/role từ body.
+Với đơn cũ thiếu một trong hai tọa độ người gửi, gửi cả pickupLat và pickupLng. Khi parcel đã có đủ senderLat/senderLng, service ưu tiên cặp tọa độ đã lưu.
 
-| Chặng / thao tác | Side effect B01 cần commit cùng status/history |
+```json
+{
+  "destinationHubId": "demo-hub-q7",
+  "pickupLat": 10.7292,
+  "pickupLng": 106.6935
+}
+```
+
+Thiếu cặp tọa độ cho đơn cũ trả 400 “Đơn cũ cần tọa độ lấy hàng”. Không có tài xế rảnh trả 409 và không để lại assignment dở dang. Gán pickup, lưu hub đích, status và history nằm trong transaction Serializable. Sự kiện chỉ phát sau commit.
+
+## Cập nhật trạng thái
+
+Body chỉ có event và hai trường ngữ cảnh hubId/deliveryProofRef theo DTO hiện tại. isHubLocation, isFinalHub, hasDeliveryProof và các cờ guard cũ không thuộc request contract. Service suy quyền sở hữu, assignment, hub hiện tại/đích và số lần thất bại từ DB.
+
+Nhân viên kho nhận tại hub bằng event=arrive_at_hub. hubId là ID Location có type=hub, bắt buộc cho thao tác này. Hub vừa nhận được lưu vào currentLocationId.
+
+```json
+{ "event": "arrive_at_hub", "hubId": "demo-hub-q7" }
+```
+
+Admin điều phối chặng cuối bằng event=dispatch_last_mile. Service kiểm currentLocationId bằng destinationLocationId và chọn tài xế đang rảnh từ vị trí hub.
+
+```json
+{ "event": "dispatch_last_mile" }
+```
+
+Tài xế đang được gán xác nhận giao bằng event=confirm_delivery và deliveryProofRef là chuỗi tham chiếu tối đa 200 ký tự, không rỗng sau trim.
+
+```json
+{
+  "event": "confirm_delivery",
+  "deliveryProofRef": "demo-evidence-reference"
+}
+```
+
+Service lưu chuỗi đã trim vào Parcel.deliveryProof. Hiện mới kiểm tham chiếu không rỗng, chưa xác minh nội dung ảnh/chữ ký hoặc OTP. Những event khác không bắt buộc hubId/deliveryProofRef. assign_courier phải gọi endpoint riêng.
+
+## Dữ liệu và assignment
+
+Parcel lưu feeVnd và senderLat/Lng, receiverLat/Lng lúc tạo. fee giữ trong response tạo đơn để tương thích. Các cột nullable giữ NULL cho dữ liệu cũ chưa biết, UI cần hiển thị “Chưa có dữ liệu” thay vì 0. deliveryProof là dữ liệu nội bộ. driverLatitude/Longitude/LocationAt là snapshot GPS riêng, không dùng timestamp GPS để thay đổi thứ tự timeline.
+
+| Thao tác | Side effect trong ParcelsService |
 |---|---|
-| Gán pickup | Tạo pickup / assigned, chuyển PENDING_PICKUP |
-| Xác nhận lấy | pickup → in_progress |
-| Nhập hub | currentLocationId là hub thực, hoàn tất assignment chặng vừa đến |
-| Điều phối hub tiếp theo | Tạo hub_transfer / assigned nếu có courier chặng đó |
-| Điều phối chặng cuối | Tạo last_mile / assigned với tài xế rảnh, chuyển OUT_FOR_DELIVERY |
-| Giao thành công | Hoàn tất last_mile, ghi completedAt và deliveredAt |
-| Hủy trước lấy | Đóng các assignment đang hoạt động bằng cancelled |
-| Giao thất bại | Tăng failedAttemptCount, lưu note, assignment failed |
-| Giao lại / hoàn trả | B01 phải chốt việc nhận lại assignment hoặc tạo assignment mới trước nghiệm thu US-06/07 |
+| Gán pickup | Tạo pickup/assigned, PENDING_PICKUP và destinationLocationId |
+| Xác nhận lấy | Assignment của tài xế → in_progress |
+| Nhập hub đích | Đóng assignment đang hoạt động, currentLocationId cập nhật từ hubId |
+| Điều phối last mile | Tạo last_mile/assigned, OUT_FOR_DELIVERY, xóa GPS cũ về NULL |
+| Giao thành công/hoàn trả | Đóng assignment đang hoạt động bằng completed |
+| Hủy trước lấy | Đóng assignment bằng cancelled |
+| Giao thất bại | Tăng failedAttemptCount |
 
-Không có enum return trong AssignmentType. Job retry/SLA, ticket khiếu nại và vận hành trả hàng đầy đủ còn phụ thuộc B01. Chỉ trạng thái assigned/accepted/in_progress giữ tài xế bận. Chưa có kiểm chứng các side effect này trên main ngoài gán pickup.
+Job SLA/retry, ticket khiếu nại và vận hành trả hàng đầy đủ vẫn cần nghiệm thu riêng. deliveredAt hiện được gán ở mọi lần updateStatus trong code a230451, vì vậy chưa dùng riêng cột này làm bằng chứng thời điểm giao thành công.
 
-## Hook sau commit
+## Hook và Socket.IO
 
-Interface TypeScript tại backend/src/state-machine/transition-notifier.ts giữ chữ ký onTransition(parcelId, from, to, actor). M2 gọi sau transaction commit từ cả create, assign và updateStatus. StateMachineService chỉ validate, không phát sự kiện và không ghi DB.
+ParcelsService gọi ParcelNotifierService.onTransition sau commit ở create, assign và updateStatus. Hook nhận parcelId, from, to, actor và notification={id, update}. id là ParcelStatusHistory.id đã commit; update được lấy từ đúng parcel/history của transaction, không đọc lại snapshot có thể đã đổi.
 
-Notifier phải đọc đúng history đã commit hoặc nhận snapshot nhất quán trong adapter M2. Không ghép trạng thái cũ với timestamp của lần đổi sau. Bản hook bốn tham số chưa mang historyId. Nếu cần phân biệt hai transition liên tiếp cùng trạng thái hoặc bảo đảm không mất event, M2 cần outbox/event ID gắn vào history khi commit.
+Namespace mặc định /. join:parcel và leave:parcel nhận {"trackingCode":"PCL123"} cho room parcel:PCL123. Ack có ok và trackingCode. Client reconnect phải join lại và tải REST snapshot để bù sự kiện bị lỡ. Gateway kiểm định dạng mã, chưa xác nhận tồn tại khi join; REST xác nhận mã.
 
-Main hiện gọi TrackingGateway trực tiếp sau updateStatus. Gán ban đầu chưa emit và interface notifier chưa được cài đặt. B02 sở hữu việc nối điểm phát chung. Lỗi gửi sau commit cần được log/xử lý riêng, tránh trả thông báo như thể DB đã rollback.
-
-## Socket.IO đang dùng
-
-Namespace mặc định /. Room parcel:{trackingCode}. join:parcel và leave:parcel nhận {"trackingCode":"PCL123"}. Ack thành công là {"ok":true,"trackingCode":"PCL123"}. Main chỉ kiểm mã không rỗng và tối đa 64 ký tự, chưa kiểm mã có tồn tại. M1 tra REST trước, reconnect thì join lại và tải REST snapshot.
-
-parcel.status.updated và parcel.delivery.completed dùng cùng dạng dữ liệu, khớp TrackingGateway và adapter M1.
+parcel.status.updated và parcel.delivery.completed giữ cùng format.
 
 ```json
 {
   "trackingCode": "PCL123",
-  "currentStatus": "PICKED_UP",
+  "currentStatus": "DELIVERED",
   "event": {
-    "status": "PICKED_UP",
+    "status": "DELIVERED",
     "timestamp": "2026-11-25T03:00:00.000Z"
   }
 }
 ```
 
-parcel.delivery.completed chỉ gửi khi currentStatus=DELIVERED. Socket hiện dùng enum nội bộ. Bảng nhãn public trong m3.md là quy tắc hiển thị đích, chưa phải payload wire đã triển khai. Không đổi payload thành {status, updatedAt} khi M1 chưa đổi adapter. Không thêm địa chỉ, điện thoại, bằng chứng giao hoặc danh tính actor vào event công khai.
+Timestamp lấy từ history đã lưu. delivery.completed chỉ gửi khi DELIVERED. Wire dùng raw ParcelStatus; mapping nhãn ở m3.md là yêu cầu trình bày. Không gửi phone/address, actor hoặc deliveryProof trong event.
 
-driver:location nhận trackingCode, latitude, longitude, token. M1 hiện gửi token trong body và cả handshake auth.token. Backend dùng auth.token từ handshake, kiểm assignment đang hoạt động, kiểm phạm vi tọa độ và lưu vị trí trước khi phát parcel.location.updated. Payload location gồm trackingCode, latitude, longitude, timestamp ISO UTC. REST trả location hoặc null. F02 có thể dùng trường này để khôi phục GPS sau reconnect.
+driver:location nhận trackingCode/latitude/longitude. JWT shipper phải có trong handshake auth.token, token trong body không thay thế được handshake. Backend kiểm assignment đang hoạt động, trạng thái đơn, tài khoản shipper active và tọa độ hữu hạn; lưu GPS của parcel/user trước khi phát parcel.location.updated. Payload gồm trackingCode, latitude, longitude, timestamp ISO UTC. Gateway giới hạn 30 message mỗi socket trong 10 giây.
 
-## Webhook HTTP bàn giao B03
+## Tracking snapshot và reconnect
 
-Bản tích hợp triển khai sender webhook theo contract dưới đây. OpenAPI 3.1 khai báo webhooks.parcelStatusUpdated, không khai báo URL callback giả như một route backend đang có.
+GET /api/public/track/{code} luôn có location. location là null khi chưa có đủ GPS hoặc vừa điều phối last mile và GPS cũ bị xóa. Không dựng tọa độ (0,0) để thay NULL.
 
-- Đích do server cấu hình qua PARCEL_WEBHOOK_URL. Secret riêng qua PARCEL_WEBHOOK_SECRET. Timeout hiện là 2000 ms.
-- POST JSON sau commit từ notifier. Body gồm eventId, type=parcel.status.updated, occurredAt và data có cùng dạng status socket.
-- Header X-Webhook-Id trùng eventId, X-Webhook-Timestamp là Unix time giây. X-Webhook-Signature có dạng sha256=<hex>.
-- Ký HMAC-SHA256 bằng secret trên chuỗi timestamp + "." + rawBody UTF-8. Receiver so sánh constant-time, kiểm thời gian lệch tối đa 300 giây và chống nhận lặp theo eventId.
-- Receiver trả 2xx để xác nhận. Timeout hoặc ngoài 2xx ghi lỗi gắn eventId. Không đổi trạng thái parcel đã commit vì lỗi receiver.
-- Phiên bản hiện tại gửi một lần sau commit. Chưa có retry tự động hoặc hàng đợi bền vững.
-
-## Migration và seed demo
-
-Chạy trong backend, cấu hình DATABASE_URL tới DB demo riêng, JWT_SECRET riêng, DEMO_SEED_PASSWORD tối thiểu 12 ký tự và tối đa 72 byte.
-
-```powershell
-npx prisma migrate deploy
-npx prisma generate
-npx prisma db seed
+```json
+{
+  "trackingCode": "PCL123",
+  "currentStatus": "CREATED",
+  "receiverName": "Demo receiver",
+  "history": [
+    { "status": "CREATED", "timestamp": "2026-11-25T03:00:00.000Z" }
+  ],
+  "location": null
+}
 ```
 
-| Email | Role | Dùng trong demo |
-|---|---|---|
-| customer@example.test | customer | Tạo đơn / xem đơn của mình |
-| warehouse@example.test | warehouse_staff | Tiếp nhận và trung chuyển hub |
-| admin@example.test | admin | Gán pickup, điều phối chặng cuối |
-| shipper1@example.test | shipper | Lấy hàng / giao hàng, tọa độ Quận 7 |
-| shipper2@example.test | shipper | Tài xế thứ hai, tọa độ Quận 1 |
+Khi có vị trí đã lưu, cùng response dùng location như sau.
 
-Seed còn tạo demo-hub-q7 và demo-hub-q1. Các tài khoản có chung mật khẩu DEMO_SEED_PASSWORD lúc tạo. Upsert giữ nguyên tài khoản/hub đã có, không đổi mật khẩu hoặc vị trí đang dùng. Muốn đổi mật khẩu demo cần thao tác quản trị riêng. Seed không tạo đơn giả và không xóa dữ liệu người dùng. Trước deploy dữ liệu từ bản đăng ký cũ cần rà soát tài khoản quyền cao từng được tạo qua public register.
+```json
+{
+  "trackingCode": "PCL123",
+  "latitude": 10.7292,
+  "longitude": 106.6935,
+  "timestamp": "2026-11-25T03:06:00.000Z"
+}
+```
 
-## Rate limiting và giới hạn triển khai
+Object trên là giá trị của location, đồng thời là payload parcel.location.updated. M1 tải REST sau reconnect để khôi phục vị trí gần nhất và timeline. GPS có thể là vị trí trình duyệt hoặc mô phỏng, Q03 phải ghi nguồn thực dùng khi demo.
 
-RateLimitMiddleware áp dụng mọi HTTP route, mặc định RATE_LIMIT_WINDOW_MS=60000, RATE_LIMIT_MAX=120 và RATE_LIMIT_AUTH_MAX=10. Login/register cộng chung quota auth kể cả request lỗi. OPTIONS không tính, 429 có Retry-After và X-RateLimit-Limit/Remaining/Reset. Không tự tin X-Forwarded-For. Nếu có reverse proxy, M2 cấu hình trust proxy theo địa chỉ proxy tin cậy.
+## Webhook HTTP hiện tại
 
-Quota nằm trong bộ nhớ một process, không dùng chung nhiều replica. HTTP limiter chưa giới hạn Socket.IO. JWT secret phải được cấu hình, register luôn là customer. Việc kiểm quyền đối tượng ở GET và GPS là khoảng trống B02 còn mở.
+Đối chiếu backend/src/parcels/parcel-notifier.service.ts tại a230451. Cấu hình PARCEL_WEBHOOK_URL và PARCEL_WEBHOOK_SECRET. URL phải là HTTPS, trừ HTTP localhost/127.0.0.1/[::1]. Không cho credentials trong URL. Không đặt URL thì tắt gửi HTTP webhook.
+
+Body POST JSON được tạo bằng JSON.stringify, thứ tự và byte giữ nguyên khi ký.
+
+```json
+{
+  "eventId": "history-demo-001",
+  "type": "parcel.status.updated",
+  "occurredAt": "2026-11-25T03:00:00.000Z",
+  "data": {
+    "trackingCode": "PCL123",
+    "currentStatus": "DELIVERED",
+    "event": {
+      "status": "DELIVERED",
+      "timestamp": "2026-11-25T03:00:00.000Z"
+    }
+  }
+}
+```
+
+- eventId và X-Webhook-Id cùng là ID history đã commit.
+- occurredAt đúng bằng data.event.timestamp của history. X-Webhook-Timestamp là Unix time giây tại lúc gửi.
+- X-Webhook-Signature là sha256=<hex chữ thường>. HMAC-SHA256 dùng secret trên timestamp + "." + rawBody UTF-8. Receiver phải dùng rawBody nhận được, không parse rồi stringify lại để xác minh.
+- Timeout cố định 2000 ms bằng AbortSignal.timeout(2000), redirect:error. Chưa có biến PARCEL_WEBHOOK_TIMEOUT_MS.
+- Lỗi mạng, timeout hoặc receiver ngoài 2xx được log cùng eventId. REST trả kết quả dựa trên DB đã commit, lỗi Socket.IO không ngăn gửi webhook.
+- Hiện gửi một lần, chưa có retry tự động/outbox bền vững. Receiver nên kiểm chữ ký constant-time, kiểm cửa sổ timestamp và chống nhận lặp bằng eventId. Cửa sổ 300 giây là gợi ý phía receiver, không phải validation do sender đang thực hiện.
+
+## Seed và giới hạn triển khai
+
+Trong backend, đặt DATABASE_URL tới DB demo, JWT_SECRET riêng, DEMO_SEED_PASSWORD tối thiểu 12 ký tự và tối đa 72 byte. Chạy npx prisma migrate deploy, npx prisma generate và npx prisma db seed.
+
+Seed có customer@example.test, warehouse@example.test, admin@example.test, shipper1@example.test, shipper2@example.test và demo-hub-q7/demo-hub-q1. Tài khoản mới dùng DEMO_SEED_PASSWORD. Seed lại giữ nguyên mật khẩu, vị trí và hub đã tồn tại.
+
+Rate limit HTTP mặc định 120 request/60 giây, quota auth 10/60 giây dùng chung login/register. Quota lưu một process, không dùng chung nhiều replica. Các kết quả migrate/seed/unit trước đây nằm trong GIT_SUBMISSION.md. Chờ Q03 để gắn link CI và ảnh/video của đúng SHA/tag nộp.
