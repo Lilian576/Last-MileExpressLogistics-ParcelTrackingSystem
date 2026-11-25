@@ -1,6 +1,6 @@
 import { API_BASE_URL, USE_MOCK } from "./parcelApi";
 import { readError } from "./errors";
-import { AssignCourierResult, OPS_ROLES, OpsParcel, OpsSession } from "../types/ops";
+import { AssignCourierInput, AssignCourierResult, OPS_ROLES, OpsHub, OpsParcel, OpsSession, OpsStatusUpdate } from "../types/ops";
 import { ParcelStatus } from "../types/parcel";
 
 // Màn hình vận hành chỉ chạy với backend thật: không có mock để tránh "nghiệm thu" trên dữ liệu giả.
@@ -49,33 +49,37 @@ export async function listAllParcels(token: string): Promise<OpsParcel[]> {
   return (await res.json()) as OpsParcel[];
 }
 
-// PATCH /api/parcels/:id/assign-courier { pickupLat, pickupLng }
+export async function listHubs(token: string): Promise<OpsHub[]> {
+  guardReal();
+  const res = await request(`${API_BASE_URL}/api/parcels/hubs`, { headers: bearer(token) }, "Không tải được danh sách hub.");
+  return (await res.json()) as OpsHub[];
+}
+
+// PATCH /api/parcels/:id/assign-courier
 export async function assignCourier(
   token: string,
   parcelId: string,
-  pickupLat: number,
-  pickupLng: number
+  input: AssignCourierInput
 ): Promise<AssignCourierResult> {
   guardReal();
   const res = await request(
     `${API_BASE_URL}/api/parcels/${parcelId}/assign-courier`,
-    { method: "PATCH", headers: bearer(token), body: JSON.stringify({ pickupLat, pickupLng }) },
+    { method: "PATCH", headers: bearer(token), body: JSON.stringify(input) },
     "Gán tài xế thất bại."
   );
   return (await res.json()) as AssignCourierResult;
 }
 
-// PATCH /api/parcels/:id/status { event, ...guard } — StateMachineService kiểm tra lại ở backend
+// PATCH /api/parcels/:id/status
 export async function opsUpdateStatus(
   token: string,
   parcelId: string,
-  event: string,
-  context: Record<string, boolean> = {}
+  input: OpsStatusUpdate
 ): Promise<ParcelStatus> {
   guardReal();
   const res = await request(
     `${API_BASE_URL}/api/parcels/${parcelId}/status`,
-    { method: "PATCH", headers: bearer(token), body: JSON.stringify({ event, ...context }) },
+    { method: "PATCH", headers: bearer(token), body: JSON.stringify(input) },
     "Cập nhật trạng thái thất bại."
   );
   return ((await res.json()) as { currentStatus: ParcelStatus }).currentStatus;

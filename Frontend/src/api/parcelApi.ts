@@ -95,6 +95,7 @@ interface PublicTrackResponse {
   currentStatus: ParcelStatus;
   receiverName: string;
   history: ParcelEvent[];
+  location?: ParcelLocationUpdate | null;
 }
 
 function toParcel(r: PublicTrackResponse): Parcel {
@@ -107,6 +108,7 @@ function toParcel(r: PublicTrackResponse): Parcel {
     feeVnd: 0,
     currentStatus: r.currentStatus,
     history: r.history,
+    location: r.location,
   };
 }
 
@@ -129,7 +131,7 @@ export type SyncResult = { ok: true; at: Date } | { ok: false; message: string }
 
 export interface RealtimeHandlers {
   onParcel: (parcel: Parcel) => void;
-  onLocation?: (loc: ParcelLocationUpdate) => void;
+  onLocation?: (loc: ParcelLocationUpdate | null) => void;
   onConnectionChange?: (connected: boolean) => void;
   // Kết quả mỗi lần đồng bộ snapshot REST (sau mỗi lần connect/reconnect)
   onSync?: (result: SyncResult) => void;
@@ -145,16 +147,21 @@ export function subscribeToParcelRealtime(
   const { onParcel, onLocation, onConnectionChange, onSync } = handlers;
   let stopped = false;
   let latest: Parcel = initial;
+  let locationRevision = 0;
 
   // Lấy lại snapshot REST. Gọi sau MỖI lần connect (kể cả lần đầu, để không hở khoảng giữa
   // snapshot ban đầu và lúc join room) nhằm bù event bị rớt lúc mất mạng.
   const resync = async () => {
+    const revisionAtStart = locationRevision;
     try {
       const fresh = await trackParcel(trackingCode);
       if (stopped) return;
       if (fresh && isSnapshotFresh(fresh, latest)) {
         latest = fresh;
         onParcel(fresh);
+        if (fresh.location !== undefined && revisionAtStart === locationRevision) {
+          onLocation?.(fresh.location);
+        }
       }
       onSync?.({ ok: true, at: new Date() });
     } catch (err) {
@@ -173,7 +180,9 @@ export function subscribeToParcelRealtime(
     onParcel(latest);
   };
   const handleLocation = (loc: ParcelLocationUpdate) => {
-    if (!stopped && loc.trackingCode === trackingCode) onLocation?.(loc);
+    if (stopped || loc.trackingCode !== trackingCode) return;
+    locationRevision += 1;
+    onLocation?.(loc);
   };
 
   if (USE_MOCK) {

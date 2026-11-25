@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
-import { OPS_ACTIONS, OPS_WAITING_NOTE, OpsAction, OpsParcel, OpsRole } from "../../types/ops";
+import { AssignCourierInput, OPS_ACTIONS, OPS_WAITING_NOTE, OpsHub, OpsParcel, OpsRole, OpsStatusUpdate } from "../../types/ops";
 import { ParcelStatus, STATUS_LABEL, TERMINAL_STATUSES } from "../../types/parcel";
 import { PROVINCES, provinceToLatLng } from "../../lib/geo";
 
@@ -13,24 +13,36 @@ function tone(status: ParcelStatus): "ok" | "warn" | "pending" {
 interface Props {
   parcel: OpsParcel;
   role: OpsRole;
+  hubs: OpsHub[];
   busy: boolean;
   error?: string;
   info?: string;
-  onStatusAction: (parcel: OpsParcel, action: OpsAction) => void;
-  onAssign: (parcel: OpsParcel, pickupLat: number, pickupLng: number) => void;
+  onStatusAction: (parcel: OpsParcel, input: OpsStatusUpdate) => void;
+  onAssign: (parcel: OpsParcel, input: AssignCourierInput) => void;
 }
 
-export function OpsParcelCard({ parcel, role, busy, error, info, onStatusAction, onAssign }: Props) {
+export function OpsParcelCard({ parcel, role, hubs, busy, error, info, onStatusAction, onAssign }: Props) {
+  const [hubId, setHubId] = useState("");
   const [confirmed, setConfirmed] = useState(false);
   const [province, setProvince] = useState(PROVINCES[0]);
   const [lat, setLat] = useState(String(provinceToLatLng(PROVINCES[0]).lat));
   const [lng, setLng] = useState(String(provinceToLatLng(PROVINCES[0]).lng));
 
   const all = OPS_ACTIONS[parcel.currentStatus] ?? [];
-  const mine = all.filter((a) => a.roles.includes(role));
+  const atDestination = Boolean(parcel.currentLocationId && parcel.currentLocationId === parcel.destinationLocationId);
+  const mine = all.filter((action) => {
+    if (!action.roles.includes(role)) return false;
+    if (action.kind === "assign") return true;
+    if (action.event === "dispatch_last_mile") return atDestination;
+    if (action.event === "dispatch_to_next_hub") return !atDestination;
+    return true;
+  });
   const finished = TERMINAL_STATUSES.includes(parcel.currentStatus);
-  const needsConfirm = mine.some((a) => a.confirm && !a.blocked);
-  const assign = mine.find((a) => a.kind === "assign");
+  const confirmation = mine.find((action) => action.kind === "status" && action.confirm);
+  const canAssign = mine.some((action) => action.kind === "assign");
+  const canReceive = mine.some((action) => action.kind === "status" && action.event === "arrive_at_hub");
+  const needsCoordinates = parcel.senderLat == null || parcel.senderLng == null;
+  const selectedHub = hubs.find((hub) => hub.id === (hubId || parcel.destinationLocationId));
 
   function pickProvince(value: string) {
     setProvince(value);
@@ -61,7 +73,17 @@ export function OpsParcelCard({ parcel, role, busy, error, info, onStatusAction,
         </div>
       </div>
 
-      {assign && (
+      {(canAssign || canReceive) && (
+        <label className="ops-assign">
+          {canAssign ? "Hub phụ trách giao hàng" : "Hub tiếp nhận"}
+          <select value={selectedHub?.id ?? ""} onChange={(event) => setHubId(event.target.value)} disabled={busy}>
+            <option value="">Chọn hub</option>
+            {hubs.map((hub) => <option key={hub.id} value={hub.id}>{hub.name}</option>)}
+          </select>
+        </label>
+      )}
+
+      {canAssign && needsCoordinates && (
         <div className="ops-assign">
           <div className="muted">Điểm lấy hàng (toạ độ bắt buộc để chọn tài xế gần nhất):</div>
           <div className="ops-assign-row">
@@ -77,43 +99,48 @@ export function OpsParcelCard({ parcel, role, busy, error, info, onStatusAction,
         </div>
       )}
 
-      {needsConfirm && (
+      {confirmation?.kind === "status" && (
         <label className="driver-proof">
           <input type="checkbox" checked={confirmed} onChange={(e) => setConfirmed(e.target.checked)} disabled={busy} />
-          {mine.find((a) => a.confirm)?.confirm}
+          {confirmation.confirm}
         </label>
       )}
 
-      {all.length > 0 && !finished && (
+      {mine.length > 0 && !finished && (
         <div className="driver-actions">
-          {all
-            .filter((a) => a.roles.includes(role) || a.blocked)
-            .map((a) => {
-              const disabled =
-                busy ||
-                !!a.blocked ||
-                (a.kind === "assign" && !coordsOk) ||
-                (!!a.confirm && !confirmed);
-              return (
-                <button
-                  key={a.id}
-                  className="btn btn-primary"
-                  disabled={disabled}
-                  title={a.blocked}
-                  onClick={() => (a.kind === "assign" ? onAssign(parcel, latN, lngN) : onStatusAction(parcel, a))}
-                >
-                  {busy && !a.blocked ? "Đang xử lý..." : a.label}
-                </button>
-              );
-            })}
+          {mine.map((action) => {
+            const input = action.kind === "assign"
+              ? null
+              : action.event === "arrive_at_hub"
+                ? selectedHub && confirmed
+                  ? { event: action.event, hubId: selectedHub.id } as const
+                  : null
+                : { event: action.event } as const;
+            const disabled = busy || (action.kind === "assign"
+              ? !selectedHub || (needsCoordinates && !coordsOk)
+              : !input);
+            return (
+              <button
+                key={action.id}
+                className="btn btn-primary"
+                disabled={disabled}
+                onClick={() => {
+                  if (action.kind === "assign" && selectedHub) {
+                    onAssign(parcel, {
+                      destinationHubId: selectedHub.id,
+                      ...(needsCoordinates ? { pickupLat: latN, pickupLng: lngN } : {}),
+                    });
+                  } else if (input) {
+                    onStatusAction(parcel, input);
+                  }
+                }}
+              >
+                {busy ? "Đang xử lý..." : action.label}
+              </button>
+            );
+          })}
         </div>
       )}
-
-      {all.filter((a) => a.blocked && a.roles.includes(role)).map((a) => (
-        <div key={a.id} className="notice notice-warn">
-          ⛔ “{a.label}” chưa thực hiện được: {a.blocked}
-        </div>
-      ))}
 
       {(finished || mine.length === 0) && (
         <div className="muted driver-wait">

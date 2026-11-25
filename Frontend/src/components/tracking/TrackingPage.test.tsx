@@ -70,6 +70,15 @@ describe("TrackingPage", () => {
     await waitFor(() => expect(subscribe).toHaveBeenCalledTimes(1));
   });
 
+  it("hiển thị GPS đã lưu từ snapshot ban đầu", async () => {
+    trackParcel.mockResolvedValue({
+      ...PARCEL,
+      location: { trackingCode: "PCL1", latitude: 10.77, longitude: 106.7, timestamp: "2026-01-01T02:00:00.000Z" },
+    });
+    renderPage();
+    expect(await screen.findByTestId("map")).toBeInTheDocument();
+  });
+
   it("mất kết nối -> cảnh báo + giữ vị trí gần nhất đã nhận", async () => {
     trackParcel.mockResolvedValue(PARCEL);
     renderPage();
