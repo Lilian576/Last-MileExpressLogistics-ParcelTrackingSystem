@@ -1,20 +1,49 @@
-import { Test, TestingModule } from '@nestjs/testing';
 import { INestApplication, ValidationPipe } from '@nestjs/common';
-import request from 'supertest';
+import { LocationType, Role } from '@prisma/client';
+import { Test, TestingModule } from '@nestjs/testing';
+import * as bcrypt from 'bcrypt';
+import { AddressInfo } from 'node:net';
+import { Server } from 'node:http';
 import { io, Socket } from 'socket.io-client';
-import { Server } from 'http';
-import { AddressInfo } from 'net';
+import request from 'supertest';
 import { AppModule } from '../src/app.module';
 import { PrismaService } from '../src/common/prisma.service';
+import { TransitionEvent } from '../src/state-machine/state-machine.types';
+import {
+  ParcelStatusUpdatePayload,
+  TRACKING_EVENTS,
+} from '../src/tracking/tracking.gateway';
 
-describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
+type AuthResponse = {
+  accessToken: string;
+};
+
+type ParcelResponse = {
+  id: string;
+  trackingCode: string;
+  currentStatus: string;
+};
+
+type TrackingResponse = {
+  trackingCode: string;
+  currentStatus: string;
+};
+
+const parseJson = <T>(response: { text: string }): T =>
+  JSON.parse(response.text) as T;
+
+describe('Parcel delivery and tracking workflow (e2e)', () => {
   let app: INestApplication;
   let prisma: PrismaService;
   let socket: Socket;
-  let baseUrl: string;
-
   let customerToken: string;
+  let adminToken: string;
+  let warehouseToken: string;
+  let shipperToken: string;
+  let lastMileShipperToken: string;
+  let parcelId: string;
   let trackingCode: string;
+  let hubId: string;
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -27,81 +56,134 @@ describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
     );
     await app.init();
     await app.listen(0);
+    prisma = app.get(PrismaService);
 
-    const httpServer = app.getHttpServer() as Server;
-    const address = httpServer.address() as AddressInfo;
-    baseUrl = `http://127.0.0.1:${address.port}`;
-
-    prisma = app.get<PrismaService>(PrismaService);
+    const server = app.getHttpServer() as Server;
+    const address = server.address() as AddressInfo;
+    socket = io(`http://127.0.0.1:${address.port}`, {
+      transports: ['websocket'],
+    });
+    await new Promise<void>((resolve, reject) => {
+      socket.once('connect', resolve);
+      socket.once('connect_error', reject);
+    });
   });
 
   afterAll(async () => {
-    if (socket && socket.connected) {
-      socket.disconnect();
-    }
-    await app.close();
+    socket?.disconnect();
+    await app?.close();
   });
 
-  it('1. Register & login customer and shipper accounts', async () => {
-    const uniqueSuffix = Date.now();
-    const customerEmail = `cust_${uniqueSuffix}@test.com`;
-    const shipperEmail = `ship_${uniqueSuffix}@test.com`;
-    const customerPhone = `09${String(uniqueSuffix).slice(-8)}`;
-    const shipperPhone = `08${String(uniqueSuffix).slice(-8)}`;
-
+  it('creates test customer, staff, shippers and destination hub', async () => {
+    const suffix = `${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
     const server = app.getHttpServer() as Server;
+    const register = await request(server)
+      .post('/auth/register')
+      .send({
+        email: `customer_${suffix}@example.test`,
+        password: 'Password123!',
+        fullName: 'E2E Customer',
+        phone: `09${suffix.slice(-8)}`,
+      })
+      .expect(201);
+    customerToken = parseJson<AuthResponse>(register).accessToken;
 
-    const registerRes = await request(server).post('/auth/register').send({
-      email: customerEmail,
-      password: 'Password123!',
-      fullName: 'Test Customer',
-      phone: customerPhone, // Thêm trường này
-      role: 'customer', // Thêm trường này đề phòng API yêu cầu
+    const passwordHash = await bcrypt.hash('Password123!', 10);
+    await prisma.user.createMany({
+      data: [
+        {
+          email: `admin_${suffix}@example.test`,
+          fullName: 'E2E Admin',
+          phone: `07${suffix.slice(-8)}`,
+          passwordHash,
+          role: Role.admin,
+        },
+        {
+          email: `shipper_${suffix}@example.test`,
+          fullName: 'E2E Shipper',
+          phone: `08${suffix.slice(-8)}`,
+          passwordHash,
+          role: Role.shipper,
+          currentLatitude: 10.762622,
+          currentLongitude: 106.660172,
+          locationUpdatedAt: new Date(),
+        },
+        {
+          email: `last_mile_shipper_${suffix}@example.test`,
+          fullName: 'E2E Last-Mile Shipper',
+          phone: `06${suffix.slice(-8)}`,
+          passwordHash,
+          role: Role.shipper,
+          currentLatitude: 10.732669,
+          currentLongitude: 106.699173,
+          locationUpdatedAt: new Date(),
+        },
+        {
+          email: `warehouse_${suffix}@example.test`,
+          fullName: 'E2E Warehouse Staff',
+          phone: `05${suffix.slice(-8)}`,
+          passwordHash,
+          role: Role.warehouse_staff,
+        },
+      ],
     });
 
-    // In ra lỗi chi tiết nếu đăng ký thất bại
-    if (registerRes.status !== 201) {
-      console.log('--- LỖI API ĐĂNG KÝ ---');
-      console.log(registerRes.body);
-    }
-
-    expect(registerRes.status).toBe(201);
-
-    const custLogin = await request(server)
-      .post('/auth/login')
-      .send({ email: customerEmail, password: 'Password123!' })
-      .expect(200);
-
-    const loginBody = custLogin.body as {
-      accessToken: string;
-      user?: { passwordHash?: string };
-    };
-    customerToken = loginBody.accessToken;
-
-    await prisma.user.create({
+    const hub = await prisma.location.create({
       data: {
-        email: shipperEmail,
-        passwordHash: loginBody.user?.passwordHash || 'hashed',
-        fullName: 'Test Shipper',
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
-        role: 'shipper' as any,
-        currentLatitude: 10.762622,
-        currentLongitude: 106.660172,
-        phone: shipperPhone,
+        name: `E2E Hub ${suffix}`,
+        type: LocationType.hub,
+        address: 'E2E test location',
+        latitude: 10.732669,
+        longitude: 106.699173,
       },
     });
+    hubId = hub.id;
+
+    const adminLogin = await request(server)
+      .post('/auth/login')
+      .send({ email: `admin_${suffix}@example.test`, password: 'Password123!' })
+      .expect(200);
+    adminToken = parseJson<AuthResponse>(adminLogin).accessToken;
+
+    const warehouseLogin = await request(server)
+      .post('/auth/login')
+      .send({
+        email: `warehouse_${suffix}@example.test`,
+        password: 'Password123!',
+      })
+      .expect(200);
+    warehouseToken = parseJson<AuthResponse>(warehouseLogin).accessToken;
+
+    const shipperLogin = await request(server)
+      .post('/auth/login')
+      .send({
+        email: `shipper_${suffix}@example.test`,
+        password: 'Password123!',
+      })
+      .expect(200);
+    shipperToken = parseJson<AuthResponse>(shipperLogin).accessToken;
+
+    const lastMileShipperLogin = await request(server)
+      .post('/auth/login')
+      .send({
+        email: `last_mile_shipper_${suffix}@example.test`,
+        password: 'Password123!',
+      })
+      .expect(200);
+    lastMileShipperToken =
+      parseJson<AuthResponse>(lastMileShipperLogin).accessToken;
   });
 
-  it('2. Create parcel via POST /api/parcels', async () => {
+  it('creates and subscribes to a parcel', async () => {
     const server = app.getHttpServer() as Server;
-    const res = await request(server)
+    const response = await request(server)
       .post('/api/parcels')
       .set('Authorization', `Bearer ${customerToken}`)
       .send({
-        receiverName: 'Nguyen Van B',
+        receiverName: 'E2E Receiver',
         receiverPhone: '0901234567',
-        receiverAddress: '19 Nguyen Huu Tho, Q7, HCMC',
-        weightKg: 2.5,
+        receiverAddress: 'E2E delivery address',
+        weightKg: 2,
         senderLat: 10.762622,
         senderLng: 106.660172,
         receiverLat: 10.732669,
@@ -109,36 +191,92 @@ describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
       })
       .expect(201);
 
-    const parcelBody = res.body as { trackingCode: string; id: string };
-    trackingCode = parcelBody.trackingCode;
+    const parcel = parseJson<ParcelResponse>(response);
+    parcelId = parcel.id;
+    trackingCode = parcel.trackingCode;
+    expect(parcel.currentStatus).toBe('CREATED');
+
+    const joined = (await socket.emitWithAck('join:parcel', {
+      trackingCode,
+    })) as { ok: boolean; trackingCode: string };
+    expect(joined).toEqual({ ok: true, trackingCode });
   });
 
-  it('3. Join WebSocket room via join:parcel and verify tracking', async () => {
-    socket = io(baseUrl, { transports: ['websocket'] });
-
-    await new Promise<void>((resolve) => {
-      socket.on('connect', () => {
-        socket.emit('join:parcel', { trackingCode });
-        resolve();
-      });
-    });
-
+  it('runs the delivery lifecycle and broadcasts every status transition', async () => {
     const server = app.getHttpServer() as Server;
-    const trackRes = await request(server).get(
-      `/api/public/track/${trackingCode}`,
+    const expectBroadcast = async (
+      status: string,
+      action: () => Promise<unknown>,
+    ) => {
+      const event = new Promise<ParcelStatusUpdatePayload>((resolve) => {
+        socket.once(TRACKING_EVENTS.STATUS_UPDATED, resolve);
+      });
+      await action();
+      expect(await event).toMatchObject({
+        trackingCode,
+        currentStatus: status,
+        event: { status },
+      });
+      const track = await request(server)
+        .get(`/api/public/track/${trackingCode}`)
+        .expect(200);
+      expect(parseJson<TrackingResponse>(track).currentStatus).toBe(status);
+    };
+
+    await expectBroadcast('PENDING_PICKUP', () =>
+      request(server)
+        .patch(`/api/parcels/${parcelId}/assign-courier`)
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ destinationHubId: hubId })
+        .then((response) => {
+          expect(response.status).toBe(200);
+          return response;
+        }),
     );
 
-    if (trackRes.status !== 200) {
-      console.log('--- API ERROR LOG ---');
-      console.log('Status:', trackRes.status);
-      console.log('Response Body:', trackRes.body);
-    }
+    const updateStatus = (event: TransitionEvent, extra: object = {}) =>
+      request(server)
+        .patch(`/api/parcels/${parcelId}/status`)
+        .set(
+          'Authorization',
+          `Bearer ${
+            event === TransitionEvent.DISPATCH_LAST_MILE
+              ? adminToken
+              : event === TransitionEvent.ARRIVE_AT_HUB
+                ? warehouseToken
+                : event === TransitionEvent.CONFIRM_DELIVERY
+                  ? lastMileShipperToken
+                  : shipperToken
+          }`,
+        )
+        .send({ event, ...extra })
+        .then((response) => {
+          expect(response.status).toBe(200);
+          return response;
+        });
 
-    expect(trackRes.status).toBe(200);
+    await expectBroadcast('PICKED_UP', () =>
+      updateStatus(TransitionEvent.CONFIRM_PICKUP),
+    );
+    await expectBroadcast('IN_TRANSIT', () =>
+      updateStatus(TransitionEvent.DEPART_TO_HUB),
+    );
+    await expectBroadcast('AT_HUB', () =>
+      updateStatus(TransitionEvent.ARRIVE_AT_HUB, { hubId }),
+    );
+    await expectBroadcast('OUT_FOR_DELIVERY', () =>
+      updateStatus(TransitionEvent.DISPATCH_LAST_MILE),
+    );
+    await expectBroadcast('DELIVERED', () =>
+      updateStatus(TransitionEvent.CONFIRM_DELIVERY, {
+        deliveryProofRef: 'e2e-proof-reference',
+      }),
+    );
+  });
 
-    const trackBody = trackRes.body as { trackingCode: string; status: string };
-    console.log('--- DỮ LIỆU ĐƠN HÀNG TRẢ VỀ ---', trackBody);
-    expect(trackBody.trackingCode).toBe(trackingCode);
-    expect(trackBody.currentStatus).toBe('CREATED');
+  it('rejects unknown tracking codes', async () => {
+    await request(app.getHttpServer() as Server)
+      .get('/api/public/track/LM_NOT_FOUND')
+      .expect(404);
   });
 });
