@@ -4,6 +4,7 @@ import { StateMachineService } from './state-machine.service';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { TransitionEvent, TransitionContext } from './state-machine.types';
 import { ParcelStatus } from '@prisma/client';
+import { TRANSITION_TABLE } from './transition-table';
 
 describe('StateMachineService', () => {
   let service: StateMachineService;
@@ -13,6 +14,48 @@ describe('StateMachineService', () => {
       providers: [StateMachineService],
     }).compile();
     service = module.get<StateMachineService>(StateMachineService);
+  });
+
+  it('lets the MVP admin dispatch the last mile with a final hub', () => {
+    expect(
+      service.assertTransition(
+        ParcelStatus.AT_HUB,
+        TransitionEvent.DISPATCH_LAST_MILE,
+        'admin',
+        { isFinalHub: true },
+      ),
+    ).toBe(ParcelStatus.OUT_FOR_DELIVERY);
+  });
+
+  it('rejects admin last-mile dispatch at an intermediate hub', () => {
+    expect(() =>
+      service.assertTransition(
+        ParcelStatus.AT_HUB,
+        TransitionEvent.DISPATCH_LAST_MILE,
+        'admin',
+        { isFinalHub: false },
+      ),
+    ).toThrow(BadRequestException);
+  });
+
+  it.each(['customer', 'shipper', 'warehouse_staff'] as const)(
+    'rejects last-mile dispatch by %s',
+    (actor) => {
+      expect(() =>
+        service.assertTransition(
+          ParcelStatus.AT_HUB,
+          TransitionEvent.DISPATCH_LAST_MILE,
+          actor,
+          { isFinalHub: true },
+        ),
+      ).toThrow(ForbiddenException);
+    },
+  );
+
+  it('preserves all 16 transitions and has no duplicate state/event pair', () => {
+    const keys = TRANSITION_TABLE.map((row) => `${row.from}:${row.event}`);
+    expect(keys).toHaveLength(16);
+    expect(new Set(keys).size).toBe(16);
   });
 
   // Nhóm 1: Kiểm thử Utility Functions

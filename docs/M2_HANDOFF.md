@@ -48,18 +48,18 @@ Cấu hình `PARCEL_WEBHOOK_URL` và `PARCEL_WEBHOOK_SECRET` theo `backend/.env.
 
 ```json
 {
-  "id": "<status-history-id>",
+  "eventId": "<status-history-id>",
   "type": "parcel.status.updated",
-  "parcelId": "<parcel-id>",
-  "trackingCode": "<tracking-code>",
-  "previousStatus": "AT_HUB",
-  "status": "OUT_FOR_DELIVERY",
-  "actor": "dispatcher",
-  "occurredAt": "<ISO-8601>"
+  "occurredAt": "<ISO-8601>",
+  "data": {
+    "trackingCode": "<tracking-code>",
+    "currentStatus": "OUT_FOR_DELIVERY",
+    "event": { "status": "OUT_FOR_DELIVERY", "timestamp": "<ISO-8601>" }
+  }
 }
 ```
 
-Receiver đối chiếu header `x-parcel-signature` với HMAC SHA-256 trên raw body. Dùng `id` để nhận diện bản ghi đã xử lý. Webhook timeout sau 2 giây và ghi log khi không gửi được hoặc khi receiver trả lỗi. Gửi theo cơ chế thử một lần sau commit. Phần tích hợp này chưa có hàng đợi bền vững hoặc retry tự động. M3 mô tả contract này trong OpenAPI 3.1.
+Receiver đối chiếu header `X-Webhook-Signature` với HMAC SHA-256 trên chuỗi `X-Webhook-Timestamp + "." + raw body`. Dùng `X-Webhook-Id` để nhận diện bản ghi đã xử lý. Webhook timeout sau 2 giây và ghi log khi không gửi được hoặc khi receiver trả lỗi. Gửi theo cơ chế thử một lần sau commit. Phần tích hợp này chưa có hàng đợi bền vững hoặc retry tự động. M3 mô tả contract này trong OpenAPI 3.1.
 
 ## 5. Chạy thử và R02 – Đóng băng
 

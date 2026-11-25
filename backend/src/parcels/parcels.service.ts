@@ -79,7 +79,7 @@ export class ParcelsService {
     const parcel = await this.prisma.parcel.create({
       data: {
         ...dto,
-        fee: this.calculateFee(dto),
+        feeVnd: this.calculateFee(dto),
         trackingCode: 'PCL' + randomBytes(16).toString('hex'),
         senderId,
         currentStatus,
@@ -91,7 +91,7 @@ export class ParcelsService {
     });
     const { statusHistory, ...created } = parcel;
     this.notify(created, statusHistory[0], null, 'customer');
-    return created;
+    return { ...created, fee: created.feeVnd };
   }
 
   findHubs() {
@@ -340,7 +340,8 @@ export class ParcelsService {
       const data: Prisma.ParcelUncheckedUpdateInput = {};
       if (hub) data.currentLocationId = hub.id;
       if (event === TransitionEvent.CONFIRM_DELIVERY)
-        data.deliveryProofRef = proof;
+        data.deliveryProof = proof;
+      data.deliveredAt = new Date();
       if (event === TransitionEvent.REPORT_FAILED_DELIVERY) {
         data.failedAttemptCount = { increment: 1 };
       }

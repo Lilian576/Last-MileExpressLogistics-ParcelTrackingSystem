@@ -57,7 +57,7 @@ describe('ParcelsService - Pricing Engine', () => {
       trackingCode: 'PCL123',
       currentStatus: 'CREATED',
       receiverName: 'Trần Thị B',
-      fee: 30000,
+      feeVnd: 30000,
       statusHistory: [{ id: 'h0', status: 'CREATED', createdAt: new Date() }],
     });
 

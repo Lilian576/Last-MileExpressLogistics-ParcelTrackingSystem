@@ -15,7 +15,6 @@ describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
 
   let customerToken: string;
   let trackingCode: string;
-  let parcelId: string;
 
   beforeAll(async () => {
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -112,7 +111,6 @@ describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
 
     const parcelBody = res.body as { trackingCode: string; id: string };
     trackingCode = parcelBody.trackingCode;
-    parcelId = parcelBody.id;
   });
 
   it('3. Join WebSocket room via join:parcel and verify tracking', async () => {
@@ -126,7 +124,9 @@ describe('End-to-End Parcel Delivery & Tracking Workflow (e2e)', () => {
     });
 
     const server = app.getHttpServer() as Server;
-    const trackRes = await request(server).get(`/api/parcels/${parcelId}`);
+    const trackRes = await request(server).get(
+      `/api/public/track/${trackingCode}`,
+    );
 
     if (trackRes.status !== 200) {
       console.log('--- API ERROR LOG ---');

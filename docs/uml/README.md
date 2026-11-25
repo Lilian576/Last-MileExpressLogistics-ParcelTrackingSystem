@@ -1,9 +1,16 @@
-# UML tuần 1
+# Sơ đồ bàn giao cuối kỳ
 
-Các file PlantUML là sơ đồ nguồn có thể render bằng PlantUML:
+Bản M3 ngày 25/11/2026. Nguồn PlantUML và PDF đi theo cặp trong cùng commit.
 
-- [Use Case](use-case.puml): actor và phạm vi nghiệp vụ, US-01–US-09.
-- [Class](class.puml): entity và service theo Prisma/m3.md.
-- [Sequence](sequence.puml): xử lý transition, rollback và hook sau commit.
+| Sơ đồ | Nguồn | Bản xem |
+|---|---|---|
+| Use Case | [use-case.puml](use-case.puml) | [use-case.pdf](use-case.pdf) |
+| Class | [class.puml](class.puml) | [class.pdf](class.pdf) |
+| Sequence | [sequence.puml](sequence.puml) | [sequence.pdf](sequence.pdf) |
+| ERD | [erd.puml](erd.puml) | [erd.pdf](erd.pdf) |
 
-Sequence là thiết kế đích; xem các khoảng trống triển khai trong [SRS](../SRS.md) và [integration](../INTEGRATION.md). ERD và State Machine hiện có trong [m3.md](../m3.md).
+Use Case mô tả phạm vi nghiệp vụ và admin kiêm điều phối. Class và ERD thể hiện cột D01 nullable cùng quan hệ Prisma. Sequence mô tả đường updateStatus trên main 8b61f25, ghi rõ điểm B02/B03 còn cần tích hợp.
+
+PDF dùng khổ theo tỷ lệ sơ đồ để giữ cỡ chữ khi xem 100%. Bản nguồn render bằng PlantUML với dpi 150, ảnh được đóng gói PDF và đã render lại bằng Poppler để kiểm tra nội dung, nhãn và cạnh trang. Không dùng PDF này làm bằng chứng luồng nghiệp vụ đã chạy.
+
+Khi M2 tích hợp B01–B03, cần cập nhật phần hiện trạng trong Sequence và xuất lại PDF từ cùng nguồn. State machine và 16 transition nằm ở [m3.md](../m3.md), REST/socket/webhook tại [INTEGRATION.md](../INTEGRATION.md) và [OpenAPI](../openapi-spec.yaml).

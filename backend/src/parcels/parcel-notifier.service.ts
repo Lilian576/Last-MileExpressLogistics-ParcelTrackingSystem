@@ -3,7 +3,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ParcelStatus } from '@prisma/client';
 import { TransitionActor } from '../state-machine/state-machine.types';
-import { TransitionNotifier } from '../state-machine/transition-notifier';
+import {
+  ParcelStatusWebhookPayload,
+  TransitionNotifier,
+} from '../state-machine/transition-notifier';
 import {
   ParcelStatusUpdatePayload,
   TrackingGateway,
@@ -40,10 +43,10 @@ export class ParcelNotifierService implements TransitionNotifier {
   }
 
   async onTransition(
-    parcelId: string,
-    from: ParcelStatus | null,
-    to: ParcelStatus,
-    actor: TransitionActor,
+    _parcelId: string,
+    _from: ParcelStatus | null,
+    _to: ParcelStatus,
+    _actor: TransitionActor,
     notification: { id: string; update: ParcelStatusUpdatePayload },
   ): Promise<void> {
     try {
@@ -53,25 +56,25 @@ export class ParcelNotifierService implements TransitionNotifier {
     }
 
     if (!this.webhookUrl || !this.webhookSecret) return;
-    const body = JSON.stringify({
-      id: notification.id,
+    const payload: ParcelStatusWebhookPayload = {
+      eventId: notification.id,
       type: 'parcel.status.updated',
-      parcelId,
-      trackingCode: notification.update.trackingCode,
-      previousStatus: from,
-      status: to,
-      actor,
       occurredAt: notification.update.event.timestamp,
-    });
+      data: notification.update,
+    };
+    const body = JSON.stringify(payload);
+    const timestamp = String(Math.floor(Date.now() / 1000));
     const signature = createHmac('sha256', this.webhookSecret)
-      .update(body)
+      .update(`${timestamp}.${body}`)
       .digest('hex');
     try {
       const response = await fetch(this.webhookUrl, {
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'x-parcel-signature': `sha256=${signature}`,
+          'x-webhook-id': notification.id,
+          'x-webhook-timestamp': timestamp,
+          'x-webhook-signature': `sha256=${signature}`,
         },
         body,
         redirect: 'error',
