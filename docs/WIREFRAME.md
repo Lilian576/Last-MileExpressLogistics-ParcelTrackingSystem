@@ -1,5 +1,6 @@
 # Wireframe UI — Customer Flow (M1, Tuần 1)
 
+> **Figma (UI/UX):** https://www.figma.com/design/90mU3C94U40Wr9jtnkdF7L/UI-UX?node-id=0-1&p=f&t=9VLay0BjnmHAsIeK-0
 > Ghi chú: bản Figma tương tác nên được nhóm dựng song song trong file Figma
 > chung của repo (link đính kèm README). Tài liệu này mô tả wireframe ở dạng
 > văn bản/ASCII — dùng làm đặc tả UI trong SRS và đối chiếu 1-1 với UI thật đã
