@@ -3,15 +3,14 @@ import { mockCustomerLogin, mockCustomerRegister } from "./mockBackend";
 import { readError } from "./errors";
 import { AuthSession, RegisterRequest } from "../types/auth";
 
-// POST /auth/register — role luôn là "customer". Gửi kèm role để tương thích với
-// backend hiện tại (RegisterDto còn bắt buộc role); khi M3 bỏ trường role khỏi
-// DTO (sửa lỗi leo thang đặc quyền) thì ValidationPipe whitelist tự loại bỏ.
+// POST /auth/register — backend luôn tạo role "customer" (RegisterDto đã bỏ trường role,
+// M3 vá lỗi leo thang đặc quyền) nên frontend KHÔNG gửi role.
 export async function register(req: RegisterRequest): Promise<AuthSession> {
   if (USE_MOCK) return mockCustomerRegister(req);
   const res = await fetch(`${API_BASE_URL}/auth/register`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ...req, role: "customer" }),
+    body: JSON.stringify(req),
   });
   if (!res.ok) throw await readError(res, "Đăng ký thất bại, vui lòng thử lại.");
   return res.json();

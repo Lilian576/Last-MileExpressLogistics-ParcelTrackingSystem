@@ -28,7 +28,7 @@ export function DriverOrdersPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<Record<string, string>>({});
   const [shareGps, setShareGps] = useState(true);
-  const gps = useDriverGps(parcels, shareGps);
+  const gps = useDriverGps(parcels, shareGps, token);
 
   const logout = useCallback(() => {
     clearDriverSession();
@@ -93,6 +93,7 @@ export function DriverOrdersPage() {
           <span className="muted">
             · {gps.source === "gps" ? "GPS thiết bị" : "GPS giả lập"}
             {gps.lastSent && ` · gửi lúc ${gps.lastSent.toLocaleTimeString("vi-VN")}`}
+            {gps.rejected && <b role="alert"> · ⚠ server từ chối vị trí: {gps.rejected}</b>}
           </span>
         )}
       </label>

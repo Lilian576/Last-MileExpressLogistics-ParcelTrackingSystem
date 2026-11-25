@@ -21,9 +21,12 @@ export function nextSimulated(prev: { lat: number; lng: number }, rnd: () => num
 // Gửi `driver:location` { trackingCode, latitude, longitude } mỗi GPS_INTERVAL_MS cho từng
 // đơn đang giao. Dùng GPS thật của trình duyệt (navigator.geolocation); nếu không có/bị từ
 // chối thì giả lập đường đi để demo. Server phát lại thành `parcel.location.updated`.
-export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean) {
+// `token` = JWT của tài xế: backend (nhánh fix/m2-backend) bắt buộc có trong handshake `auth.token`
+// và chỉ nhận vị trí của đơn đang giao cho đúng tài xế đó.
+export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean, token?: string) {
   const [source, setSource] = useState<GpsSource>("simulated");
   const [lastSent, setLastSent] = useState<Date | null>(null);
+  const [rejected, setRejected] = useState<string | null>(null); // lý do server từ chối vị trí
   const codesRef = useRef<string[]>([]);
   codesRef.current = (parcels ?? []).filter((p) => MOVING.includes(p.currentStatus)).map((p) => p.trackingCode);
   const hasActive = codesRef.current.length > 0;
@@ -32,7 +35,7 @@ export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean) {
     if (!enabled || !hasActive) return;
 
     let socket: Socket | null = null;
-    if (!USE_MOCK) socket = io(SOCKET_URL, { transports: ["websocket"], reconnection: true });
+    if (!USE_MOCK) socket = io(SOCKET_URL, { transports: ["websocket"], reconnection: true, auth: { token } });
 
     let fix: { lat: number; lng: number } | null = null;
     let sim = { ...SIM_START };
@@ -58,8 +61,13 @@ export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean) {
         pos = sim;
       }
       for (const trackingCode of codesRef.current) {
-        if (socket) socket.emit("driver:location", { trackingCode, latitude: pos.lat, longitude: pos.lng });
-        else mockEmitLocation(trackingCode, pos.lat, pos.lng);
+        if (socket) {
+          socket.emit(
+            "driver:location",
+            { trackingCode, latitude: pos.lat, longitude: pos.lng },
+            (ack?: { ok?: boolean; error?: string }) => setRejected(ack?.ok === false ? (ack.error ?? "bị từ chối") : null)
+          );
+        } else mockEmitLocation(trackingCode, pos.lat, pos.lng);
       }
       setLastSent(new Date());
     };
@@ -71,7 +79,7 @@ export function useDriverGps(parcels: DriverParcel[] | null, enabled: boolean) {
       if (watchId !== null) navigator.geolocation.clearWatch(watchId);
       socket?.disconnect();
     };
-  }, [enabled, hasActive]);
+  }, [enabled, hasActive, token]);
 
-  return { source, lastSent, active: enabled && hasActive };
+  return { source, lastSent, rejected, active: enabled && hasActive };
 }

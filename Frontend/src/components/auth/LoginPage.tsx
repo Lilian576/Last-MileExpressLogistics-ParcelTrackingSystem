@@ -26,8 +26,8 @@ export function LoginPage() {
     setError(null);
     try {
       const session = await login(email.trim(), password);
-      if (session.user.role === "shipper") {
-        throw new Error("Đây là tài khoản tài xế, vui lòng đăng nhập ở trang Tài xế.");
+      if (session.user.role !== "customer") {
+        throw new Error("Đây là tài khoản nội bộ (tài xế/quản trị), vui lòng đăng nhập ở trang Tài xế.");
       }
       saveSession(session);
       navigate(from, { replace: true });
