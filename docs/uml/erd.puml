@@ -1,0 +1,72 @@
+@startuml
+title LeMail - Relational ERD after D01 migration
+skinparam shadowing false
+skinparam dpi 150
+entity users {
+  * id : TEXT <<PK>>
+  --
+  * email : TEXT <<unique>>
+  * phone : TEXT <<unique>>
+  * password_hash : TEXT
+  * role : Role
+  current_latitude : DECIMAL?
+  current_longitude : DECIMAL?
+}
+entity parcels {
+  * id : TEXT <<PK>>
+  --
+  * tracking_code : TEXT <<unique>>
+  * sender_id : TEXT <<FK>>
+  * current_status : ParcelStatus
+  * weight_kg : DECIMAL
+  * failed_attempt_count : INT
+  origin_location_id : TEXT? <<FK>>
+  destination_location_id : TEXT? <<FK>>
+  current_location_id : TEXT? <<FK>>
+  fee_vnd : INT?
+  sender_lat/lng : NUMERIC(9,6)?
+  receiver_lat/lng : NUMERIC(9,6)?
+  delivery_proof : TEXT?
+  delivered_at : TIMESTAMP?
+}
+entity parcel_status_history {
+  * id : TEXT <<PK>>
+  --
+  * parcel_id : TEXT <<FK>>
+  * status : ParcelStatus
+  location_id : TEXT? <<FK>>
+  changed_by : TEXT? <<FK>>
+  note : TEXT?
+  * created_at : TIMESTAMP
+}
+entity locations {
+  * id : TEXT <<PK>>
+  --
+  * name : TEXT
+  * type : LocationType
+  * latitude/longitude : DECIMAL
+  parent_location_id : TEXT? <<FK>>
+}
+entity delivery_assignments {
+  * id : TEXT <<PK>>
+  --
+  * parcel_id : TEXT <<FK>>
+  * courier_id : TEXT <<FK>>
+  * assignment_type : AssignmentType
+  * status : AssignmentStatus
+  completed_at : TIMESTAMP?
+}
+users ||--o{ parcels : sender
+users ||--o{ delivery_assignments : courier
+users |o--o{ parcel_status_history : changed_by
+parcels ||--o{ parcel_status_history
+parcels ||--o{ delivery_assignments
+locations |o--o{ parcels : origin / destination / current
+locations |o--o{ parcel_status_history
+locations |o--o{ locations : parent
+note bottom of parcels
+  D01 migration only adds nullable columns.
+  Existing rows retain NULL for unknown values.
+  Coordinates use relational storage, not PostGIS.
+end note
+@enduml
