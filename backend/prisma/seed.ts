@@ -14,30 +14,33 @@ async function seed() {
 
   await prisma.$transaction([
     ...[
-      { name: 'Demo Admin', role: Role.admin },
+      { email: 'admin@example.test', name: 'Demo Admin', role: Role.admin },
       {
+        email: 'shipper1@example.test',
         name: 'Demo Shipper 1',
         role: Role.shipper,
         latitude: 10.7292,
         longitude: 106.6935,
       },
       {
+        email: 'shipper2@example.test',
         name: 'Demo Shipper 2',
         role: Role.shipper,
         latitude: 10.7731,
         longitude: 106.703,
       },
-    ].map(({ name, role, latitude, longitude }, index) =>
+      {
+        email: 'warehouse@example.test',
+        name: 'Demo Warehouse',
+        role: Role.warehouse_staff,
+      },
+    ].map(({ email, name, role, latitude, longitude }, index) =>
       prisma.user.upsert({
-        where: {
-          email:
-            index === 0 ? 'admin@example.test' : `shipper${index}@example.test`,
-        },
+        where: { email },
         update: {},
         create: {
           fullName: name,
-          email:
-            index === 0 ? 'admin@example.test' : `shipper${index}@example.test`,
+          email,
           phone: `DEMO-000${index}`,
           passwordHash,
           role,

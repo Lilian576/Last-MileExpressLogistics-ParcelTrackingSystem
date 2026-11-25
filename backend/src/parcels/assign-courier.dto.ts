@@ -1,9 +1,22 @@
-import { IsNumber } from 'class-validator';
+import {
+  IsLatitude,
+  IsLongitude,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+} from 'class-validator';
 
 export class AssignCourierDto {
-  @IsNumber()
-  pickupLat: number;
+  @IsOptional()
+  @IsLatitude()
+  pickupLat?: number;
 
-  @IsNumber()
-  pickupLng: number;
+  @IsOptional()
+  @IsLongitude()
+  pickupLng?: number;
+
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  destinationHubId?: string;
 }

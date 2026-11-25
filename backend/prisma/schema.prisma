@@ -89,6 +89,15 @@ model Parcel {
   receiverPhone         String       @map("receiver_phone")
   receiverAddress       String       @map("receiver_address")
   weightKg              Decimal      @map("weight_kg")
+  fee                   Int?
+  senderLat             Decimal?     @map("sender_lat")
+  senderLng             Decimal?     @map("sender_lng")
+  receiverLat           Decimal?     @map("receiver_lat")
+  receiverLng           Decimal?     @map("receiver_lng")
+  deliveryProofRef      String?      @map("delivery_proof_ref")
+  driverLatitude        Decimal?     @map("driver_latitude")
+  driverLongitude       Decimal?     @map("driver_longitude")
+  driverLocationAt      DateTime?    @map("driver_location_at")
   dimensions            String?
   codAmount             Decimal?     @map("cod_amount")
   currentStatus         ParcelStatus @default(CREATED) @map("current_status")

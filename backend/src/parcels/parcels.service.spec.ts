@@ -3,7 +3,8 @@ import { ParcelsService } from './parcels.service';
 import { PrismaService } from '../common/prisma.service';
 import { StateMachineService } from '../state-machine/state-machine.service';
 import { DriverAssignmentService } from './driver-assignment.service';
-import { TrackingGateway } from '../tracking/tracking.gateway';
+import { ParcelNotifierService } from './parcel-notifier.service';
+import { TransitionEvent } from '../state-machine/state-machine.types';
 
 describe('ParcelsService - Pricing Engine', () => {
   let service: ParcelsService;
@@ -16,11 +17,11 @@ describe('ParcelsService - Pricing Engine', () => {
       update: jest.fn(),
     },
     parcelStatusHistory: { create: jest.fn() },
-    deliveryAssignment: { findMany: jest.fn() },
+    deliveryAssignment: { findMany: jest.fn(), updateMany: jest.fn() },
     $transaction: jest.fn(),
   };
 
-  const mockGateway = { emitStatusUpdated: jest.fn() };
+  const mockNotifier = { onTransition: jest.fn() };
 
   const mockStateMachine = {
     assertTransition: jest.fn(),
@@ -38,7 +39,7 @@ describe('ParcelsService - Pricing Engine', () => {
         { provide: PrismaService, useValue: mockPrisma },
         { provide: StateMachineService, useValue: mockStateMachine },
         { provide: DriverAssignmentService, useValue: mockDriverAssignment },
-        { provide: TrackingGateway, useValue: mockGateway },
+        { provide: ParcelNotifierService, useValue: mockNotifier },
       ],
     }).compile();
 
@@ -50,11 +51,14 @@ describe('ParcelsService - Pricing Engine', () => {
   });
 
   it('should create a new parcel and attach fee', async () => {
+    mockStateMachine.assertTransition.mockReturnValue('CREATED');
     mockPrisma.parcel.create.mockResolvedValue({
       id: 'fake-uuid',
       trackingCode: 'PCL123',
       currentStatus: 'CREATED',
       receiverName: 'Trần Thị B',
+      fee: 30000,
+      statusHistory: [{ id: 'h0', status: 'CREATED', createdAt: new Date() }],
     });
 
     const parcel = await service.create(
@@ -118,51 +122,93 @@ describe('ParcelsService - Pricing Engine', () => {
   });
 
   describe('updateStatus', () => {
-    const parcel = { id: 'p1', trackingCode: 'PCL1', currentStatus: 'PENDING_PICKUP' };
+    const user = { userId: 'driver-1', role: 'shipper' as const };
+    const parcel = {
+      id: 'p1',
+      trackingCode: 'PCL1',
+      currentStatus: 'PENDING_PICKUP',
+    };
 
-    it('lưu DB + ghi history rồi emit event cho đúng trackingCode', async () => {
+    beforeEach(() => {
+      mockPrisma.$transaction.mockImplementation(
+        (work: (tx: typeof mockPrisma) => Promise<unknown>) => work(mockPrisma),
+      );
       mockPrisma.parcel.findUnique.mockResolvedValue(parcel);
-      mockStateMachine.assertTransition.mockReturnValue('PICKED_UP');
-      const createdAt = new Date('2026-10-27T01:00:00.000Z');
-      mockPrisma.$transaction.mockResolvedValue([
-        { ...parcel, currentStatus: 'PICKED_UP' },
-        { createdAt },
+      mockPrisma.deliveryAssignment.findMany.mockResolvedValue([
+        { courierId: user.userId },
       ]);
+    });
+
+    it('ghi lịch sử trong transaction trước khi phát trạng thái', async () => {
+      const updated = {
+        ...parcel,
+        currentStatus: 'PICKED_UP',
+        currentLocationId: null,
+      };
+      const createdAt = new Date('2026-10-27T01:00:00.000Z');
+      mockStateMachine.assertTransition.mockReturnValue(updated.currentStatus);
+      mockPrisma.parcel.update.mockResolvedValue(updated);
+      mockPrisma.parcelStatusHistory.create.mockResolvedValue({
+        id: 'h1',
+        status: updated.currentStatus,
+        createdAt,
+      });
 
       const result = await service.updateStatus(
         'p1',
-        { event: 'confirm_pickup' } as never,
-        'shipper',
-        'driver-1',
+        { event: TransitionEvent.CONFIRM_PICKUP },
+        user,
       );
 
-      expect(result.currentStatus).toBe('PICKED_UP');
+      expect(result).toEqual(updated);
       expect(mockPrisma.parcelStatusHistory.create).toHaveBeenCalledWith({
-        data: { parcelId: 'p1', status: 'PICKED_UP', changedBy: 'driver-1' },
+        data: {
+          parcelId: 'p1',
+          status: 'PICKED_UP',
+          changedBy: user.userId,
+          locationId: null,
+        },
       });
-      expect(mockGateway.emitStatusUpdated).toHaveBeenCalledWith({
-        trackingCode: 'PCL1',
-        currentStatus: 'PICKED_UP',
-        event: { status: 'PICKED_UP', timestamp: createdAt.toISOString() },
-      });
+      expect(mockNotifier.onTransition).toHaveBeenCalledWith(
+        'p1',
+        'PENDING_PICKUP',
+        'PICKED_UP',
+        'shipper',
+        {
+          id: 'h1',
+          update: {
+            trackingCode: 'PCL1',
+            currentStatus: 'PICKED_UP',
+            event: { status: 'PICKED_UP', timestamp: createdAt.toISOString() },
+          },
+        },
+      );
+      expect(
+        mockPrisma.parcelStatusHistory.create.mock.invocationCallOrder[0],
+      ).toBeLessThan(mockNotifier.onTransition.mock.invocationCallOrder[0]);
     });
 
-    it('transition không hợp lệ -> throw và KHÔNG emit', async () => {
-      mockPrisma.parcel.findUnique.mockResolvedValue(parcel);
-      mockStateMachine.assertTransition.mockImplementation(() => {
-        throw new Error('invalid');
-      });
-
+    it('không phát sự kiện khi tài xế không được giao đơn', async () => {
+      mockPrisma.deliveryAssignment.findMany.mockResolvedValue([]);
       await expect(
-        service.updateStatus('p1', { event: 'confirm_delivery' } as never, 'shipper'),
-      ).rejects.toThrow('invalid');
-      expect(mockGateway.emitStatusUpdated).not.toHaveBeenCalled();
+        service.updateStatus(
+          'p1',
+          { event: TransitionEvent.DEPART_TO_HUB },
+          user,
+        ),
+      ).rejects.toThrow('không có quyền');
+      expect(mockPrisma.parcel.update).not.toHaveBeenCalled();
+      expect(mockNotifier.onTransition).not.toHaveBeenCalled();
     });
 
-    it('không tìm thấy đơn -> NotFoundException', async () => {
+    it('không tìm thấy đơn thì trả lỗi', async () => {
       mockPrisma.parcel.findUnique.mockResolvedValue(null);
       await expect(
-        service.updateStatus('x', { event: 'confirm_pickup' } as never, 'shipper'),
+        service.updateStatus(
+          'x',
+          { event: TransitionEvent.CONFIRM_PICKUP },
+          user,
+        ),
       ).rejects.toThrow('Không tìm thấy');
     });
   });
@@ -170,7 +216,10 @@ describe('ParcelsService - Pricing Engine', () => {
   describe('findAssignedTo', () => {
     it('trả về đơn của shipper, khử trùng khi 1 đơn có 2 assignment', async () => {
       const p = { id: 'p1', trackingCode: 'PCL1' };
-      mockPrisma.deliveryAssignment.findMany.mockResolvedValue([{ parcel: p }, { parcel: p }]);
+      mockPrisma.deliveryAssignment.findMany.mockResolvedValue([
+        { parcel: p },
+        { parcel: p },
+      ]);
       const list = await service.findAssignedTo('driver-1');
       expect(list).toEqual([p]);
       const [args] = mockPrisma.deliveryAssignment.findMany.mock.calls[0] as [
@@ -226,7 +275,6 @@ describe('ParcelsService - Pricing Engine', () => {
         {
           status: 'CREATED',
           timestamp: createdAt.toISOString(),
-          note: 'tạo đơn',
         },
       ]);
     });
@@ -242,6 +290,7 @@ describe('ParcelsService - Pricing Engine', () => {
       expect(Object.keys(result).sort()).toEqual([
         'currentStatus',
         'history',
+        'location',
         'receiverName',
         'trackingCode',
       ]);

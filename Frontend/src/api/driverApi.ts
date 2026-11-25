@@ -39,15 +39,14 @@ export async function updateParcelStatus(
   token: string,
   parcel: DriverParcel,
   action: ShipperAction,
-  hasDeliveryProof: boolean
+  deliveryProofRef: string
 ): Promise<ParcelStatus> {
   if (USE_MOCK) {
-    const r = await mockDriverUpdateStatus(token, parcel.id, action.event, { hasDeliveryProof });
+    const r = await mockDriverUpdateStatus(token, parcel.id, action.event, { hasDeliveryProof: Boolean(deliveryProofRef.trim()) });
     return r.currentStatus;
   }
   const body: Record<string, unknown> = { event: action.event };
-  if (action.event === "confirm_pickup") body.isAssignedCourier = true; // đơn nằm trong danh sách của tài xế này
-  if (action.needsProof) body.hasDeliveryProof = hasDeliveryProof;
+  if (action.needsProof) body.deliveryProofRef = deliveryProofRef;
   const res = await fetch(`${API_BASE_URL}/api/parcels/${parcel.id}/status`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },

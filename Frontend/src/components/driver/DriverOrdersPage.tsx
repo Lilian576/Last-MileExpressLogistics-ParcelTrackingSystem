@@ -55,11 +55,11 @@ export function DriverOrdersPage() {
 
   if (!session || !token) return <Navigate to="/driver/login" replace />;
 
-  async function handleAction(parcel: DriverParcel, action: ShipperAction, hasProof: boolean) {
+  async function handleAction(parcel: DriverParcel, action: ShipperAction, proofRef: string) {
     setBusyId(parcel.id);
     setRowError((e) => ({ ...e, [parcel.id]: "" }));
     try {
-      const newStatus = await updateParcelStatus(token!, parcel, action, hasProof);
+      const newStatus = await updateParcelStatus(token!, parcel, action, proofRef);
       setParcels((list) => list?.map((p) => (p.id === parcel.id ? { ...p, currentStatus: newStatus } : p)) ?? list);
     } catch (err) {
       if (err instanceof AuthExpiredError) return logout();
