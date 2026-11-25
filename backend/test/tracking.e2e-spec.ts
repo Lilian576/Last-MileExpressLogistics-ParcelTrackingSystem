@@ -38,6 +38,7 @@ describe('Parcel delivery and tracking workflow (e2e)', () => {
   let socket: Socket;
   let customerToken: string;
   let adminToken: string;
+  let warehouseToken: string;
   let shipperToken: string;
   let lastMileShipperToken: string;
   let parcelId: string;
@@ -73,7 +74,7 @@ describe('Parcel delivery and tracking workflow (e2e)', () => {
     await app?.close();
   });
 
-  it('creates test customer, dispatcher, shipper and destination hub', async () => {
+  it('creates test customer, staff, shippers and destination hub', async () => {
     const suffix = `${Date.now()}_${Math.floor(Math.random() * 1_000_000)}`;
     const server = app.getHttpServer() as Server;
     const register = await request(server)
@@ -117,6 +118,13 @@ describe('Parcel delivery and tracking workflow (e2e)', () => {
           currentLongitude: 106.699173,
           locationUpdatedAt: new Date(),
         },
+        {
+          email: `warehouse_${suffix}@example.test`,
+          fullName: 'E2E Warehouse Staff',
+          phone: `05${suffix.slice(-8)}`,
+          passwordHash,
+          role: Role.warehouse_staff,
+        },
       ],
     });
 
@@ -136,6 +144,15 @@ describe('Parcel delivery and tracking workflow (e2e)', () => {
       .send({ email: `admin_${suffix}@example.test`, password: 'Password123!' })
       .expect(200);
     adminToken = parseJson<AuthResponse>(adminLogin).accessToken;
+
+    const warehouseLogin = await request(server)
+      .post('/auth/login')
+      .send({
+        email: `warehouse_${suffix}@example.test`,
+        password: 'Password123!',
+      })
+      .expect(200);
+    warehouseToken = parseJson<AuthResponse>(warehouseLogin).accessToken;
 
     const shipperLogin = await request(server)
       .post('/auth/login')
@@ -225,9 +242,11 @@ describe('Parcel delivery and tracking workflow (e2e)', () => {
           `Bearer ${
             event === TransitionEvent.DISPATCH_LAST_MILE
               ? adminToken
-              : event === TransitionEvent.CONFIRM_DELIVERY
-                ? lastMileShipperToken
-                : shipperToken
+              : event === TransitionEvent.ARRIVE_AT_HUB
+                ? warehouseToken
+                : event === TransitionEvent.CONFIRM_DELIVERY
+                  ? lastMileShipperToken
+                  : shipperToken
           }`,
         )
         .send({ event, ...extra })
