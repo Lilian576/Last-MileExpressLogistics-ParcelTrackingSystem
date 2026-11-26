@@ -5,7 +5,7 @@ type Handler = (...args: unknown[]) => void;
 function makeSocket() {
   const handlers = new Map<string, Handler[]>();
   const socket = {
-    connected: true,
+    connected: false,
     on: vi.fn((ev: string, cb: Handler) => {
       handlers.set(ev, [...(handlers.get(ev) ?? []), cb]);
       return socket;
@@ -15,9 +15,17 @@ function makeSocket() {
       return socket;
     }),
     emit: vi.fn(),
-    disconnect: vi.fn(),
+    disconnect: vi.fn(() => {
+      socket.connected = false;
+    }),
     fire: (ev: string, ...args: unknown[]) => handlers.get(ev)?.forEach((h) => h(...args)),
     listenerCount: () => [...handlers.values()].reduce((n, l) => n + l.length, 0),
+  };
+  const fire = socket.fire;
+  socket.fire = (ev: string, ...args: unknown[]) => {
+    if (ev === "connect") socket.connected = true;
+    if (ev === "disconnect") socket.connected = false;
+    fire(ev, ...args);
   };
   return socket;
 }
@@ -32,6 +40,14 @@ const json = (body: unknown, status = 200) => new Response(JSON.stringify(body),
 
 let socket: ReturnType<typeof makeSocket>;
 let ioMock: ReturnType<typeof vi.fn>;
+
+function acknowledgeJoin(ok = true, error?: string) {
+  const join = socket.emit.mock.calls.filter((call) => call[0] === "join:parcel").pop();
+  const ack = join?.[2];
+  if (typeof ack === "function") {
+    (ack as (result: { ok: boolean; error?: string }) => void)({ ok, error });
+  }
+}
 
 async function load() {
   vi.resetModules();
@@ -68,6 +84,21 @@ describe("trackParcel (backend thật)", () => {
     vi.stubGlobal("fetch", vi.fn(async () => Promise.reject(new TypeError("Failed to fetch"))));
     await expect(api.trackParcel("PCL1")).rejects.toThrow("Không kết nối được tới máy chủ");
   });
+
+  it("giữ vị trí GPS gần nhất từ snapshot công khai", async () => {
+    const api = await load();
+    const location = {
+      trackingCode: "PCL1",
+      latitude: 10.77,
+      longitude: 106.7,
+      timestamp: "2026-01-01T02:00:00.000Z",
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => json({ ...SNAPSHOT, location })));
+
+    await expect(api.trackParcel("PCL1")).resolves.toEqual(
+      expect.objectContaining({ location }),
+    );
+  });
 });
 
 describe("subscribeToParcelRealtime", () => {
@@ -88,8 +119,10 @@ describe("subscribeToParcelRealtime", () => {
     const before = socket.listenerCount();
 
     socket.fire("connect");
+    acknowledgeJoin();
     socket.fire("disconnect");
     socket.fire("connect"); // reconnect
+    acknowledgeJoin();
 
     expect(socket.listenerCount()).toBe(before); // không nhân đôi listener
     const joins = socket.emit.mock.calls.filter((c) => c[0] === "join:parcel");
@@ -101,11 +134,82 @@ describe("subscribeToParcelRealtime", () => {
     const onSync = vi.fn();
     api.subscribeToParcelRealtime("PCL1", initial(), { onParcel: vi.fn(), onSync });
     socket.fire("connect");
+    acknowledgeJoin();
     await vi.waitFor(() => expect(onSync).toHaveBeenCalledWith(expect.objectContaining({ ok: true })));
 
     vi.stubGlobal("fetch", vi.fn(async () => json({ message: "down" }, 503)));
+    socket.fire("disconnect");
     socket.fire("connect");
+    acknowledgeJoin();
     await vi.waitFor(() => expect(onSync).toHaveBeenLastCalledWith({ ok: false, message: "down" }));
+  });
+
+  it("chỉ báo kết nối sau khi vào room và lấy lại GPS bị lỡ sau reconnect", async () => {
+    const api = await load();
+    const oldLocation = {
+      trackingCode: "PCL1",
+      latitude: 10.77,
+      longitude: 106.7,
+      timestamp: "2026-01-01T02:00:00.000Z",
+    };
+    const missedLocation = {
+      trackingCode: "PCL1",
+      latitude: 10.78,
+      longitude: 106.71,
+      timestamp: "2026-01-01T03:00:00.000Z",
+    };
+    let snapshot = { ...SNAPSHOT, location: oldLocation };
+    vi.stubGlobal("fetch", vi.fn(async () => json(snapshot)));
+
+    const onLocation = vi.fn();
+    const onConnectionChange = vi.fn();
+    api.subscribeToParcelRealtime("PCL1", { ...initial(), location: oldLocation }, {
+      onParcel: vi.fn(),
+      onLocation,
+      onConnectionChange,
+    });
+
+    socket.fire("connect");
+    expect(onConnectionChange).not.toHaveBeenCalledWith(true);
+    acknowledgeJoin();
+    await vi.waitFor(() => expect(onConnectionChange).toHaveBeenLastCalledWith(true));
+    expect(onLocation).not.toHaveBeenCalled();
+
+    socket.fire("disconnect");
+    snapshot = { ...SNAPSHOT, location: missedLocation };
+    socket.fire("connect");
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    acknowledgeJoin();
+
+    await vi.waitFor(() => expect(onLocation).toHaveBeenCalledWith(missedLocation));
+    socket.fire("parcel.location.updated", {
+      ...oldLocation,
+      timestamp: "2026-01-01T02:30:00.000Z",
+    });
+    expect(onLocation).toHaveBeenCalledTimes(1);
+    socket.fire("parcel.location.updated", {
+      ...missedLocation,
+      latitude: 10.79,
+      timestamp: "2026-01-01T04:00:00.000Z",
+    });
+    expect(onLocation).toHaveBeenCalledTimes(2);
+  });
+
+  it("không báo kết nối khi server từ chối join room", async () => {
+    const api = await load();
+    const onConnectionChange = vi.fn();
+    const onSync = vi.fn();
+    api.subscribeToParcelRealtime("PCL1", initial(), { onParcel: vi.fn(), onConnectionChange, onSync });
+
+    socket.fire("connect");
+    acknowledgeJoin(false, "rate_limited");
+
+    expect(onConnectionChange).toHaveBeenLastCalledWith(false);
+    expect(onConnectionChange).not.toHaveBeenCalledWith(true);
+    expect(onSync).toHaveBeenLastCalledWith({
+      ok: false,
+      message: "Máy chủ từ chối theo dõi đơn: rate_limited",
+    });
   });
 
   it("ghép bản vá trạng thái, định tuyến vị trí, bỏ qua mã khác", async () => {
@@ -114,6 +218,8 @@ describe("subscribeToParcelRealtime", () => {
     const onLocation = vi.fn();
     const onConnectionChange = vi.fn();
     api.subscribeToParcelRealtime("PCL1", initial(), { onParcel, onLocation, onConnectionChange });
+    socket.fire("connect");
+    acknowledgeJoin();
 
     socket.fire("parcel.status.updated", {
       trackingCode: "PCL1",
@@ -124,7 +230,7 @@ describe("subscribeToParcelRealtime", () => {
 
     socket.fire("parcel.location.updated", { trackingCode: "OTHER", latitude: 1, longitude: 2, timestamp: "t" });
     expect(onLocation).not.toHaveBeenCalled();
-    socket.fire("parcel.location.updated", { trackingCode: "PCL1", latitude: 10, longitude: 106, timestamp: "t" });
+    socket.fire("parcel.location.updated", { trackingCode: "PCL1", latitude: 10, longitude: 106, timestamp: "2026-01-01T02:00:00.000Z" });
     expect(onLocation).toHaveBeenCalledTimes(1);
 
     socket.fire("disconnect");
@@ -147,6 +253,8 @@ describe("subscribeToParcelRealtime", () => {
   it("cleanup rời room, gỡ toàn bộ listener và đóng socket", async () => {
     const api = await load();
     const cleanup = api.subscribeToParcelRealtime("PCL1", initial(), { onParcel: vi.fn() });
+    socket.fire("connect");
+    acknowledgeJoin();
     cleanup();
     expect(socket.emit).toHaveBeenCalledWith("leave:parcel", { trackingCode: "PCL1" });
     expect(socket.off).toHaveBeenCalled();

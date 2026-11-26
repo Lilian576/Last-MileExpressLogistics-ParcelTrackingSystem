@@ -1,0 +1,7 @@
+services:
+  postgres:
+    ports: !override
+      - "127.0.0.1:55433:5432"
+  api:
+    ports: !override
+      - "127.0.0.1:33001:3000"

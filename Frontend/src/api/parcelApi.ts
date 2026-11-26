@@ -108,7 +108,7 @@ function toParcel(r: PublicTrackResponse): Parcel {
     feeVnd: 0,
     currentStatus: r.currentStatus,
     history: r.history,
-    location: r.location,
+    location: r.location ?? null,
   };
 }
 
@@ -147,21 +147,29 @@ export function subscribeToParcelRealtime(
   const { onParcel, onLocation, onConnectionChange, onSync } = handlers;
   let stopped = false;
   let latest: Parcel = initial;
-  let locationRevision = 0;
+  let latestLocation = initial.location ?? null;
+
+  const publishLocation = (loc: ParcelLocationUpdate) => {
+    if (stopped || loc.trackingCode !== trackingCode) return;
+    const locTime = Date.parse(loc.timestamp);
+    const latestTime = latestLocation ? Date.parse(latestLocation.timestamp) : Number.NEGATIVE_INFINITY;
+    if (!Number.isFinite(locTime) || locTime <= latestTime) return;
+    latestLocation = loc;
+    onLocation?.(loc);
+  };
 
   // Lấy lại snapshot REST. Gọi sau MỖI lần connect (kể cả lần đầu, để không hở khoảng giữa
   // snapshot ban đầu và lúc join room) nhằm bù event bị rớt lúc mất mạng.
   const resync = async () => {
-    const revisionAtStart = locationRevision;
     try {
       const fresh = await trackParcel(trackingCode);
       if (stopped) return;
-      if (fresh && isSnapshotFresh(fresh, latest)) {
-        latest = fresh;
-        onParcel(fresh);
-        if (fresh.location !== undefined && revisionAtStart === locationRevision) {
-          onLocation?.(fresh.location);
+      if (fresh) {
+        if (isSnapshotFresh(fresh, latest)) {
+          latest = fresh;
+          onParcel(fresh);
         }
+        if (fresh.location) publishLocation(fresh.location);
       }
       onSync?.({ ok: true, at: new Date() });
     } catch (err) {
@@ -180,9 +188,7 @@ export function subscribeToParcelRealtime(
     onParcel(latest);
   };
   const handleLocation = (loc: ParcelLocationUpdate) => {
-    if (stopped || loc.trackingCode !== trackingCode) return;
-    locationRevision += 1;
-    onLocation?.(loc);
+    publishLocation(loc);
   };
 
   if (USE_MOCK) {
@@ -209,17 +215,26 @@ export function subscribeToParcelRealtime(
   // Mỗi lần connect phải join lại room (server không nhớ room của socket cũ) rồi resync.
   // Các listener dưới đây được đăng ký đúng 1 lần cho socket này; reconnect của socket.io
   // dùng lại chính socket + listener nên không bị nhân đôi.
+  let joinAttempt = 0;
   socket.on("connect", () => {
-    onConnectionChange?.(true);
+    const attempt = ++joinAttempt;
     socket.emit("join:parcel", { trackingCode }, (ack?: { ok?: boolean; error?: string }) => {
-      if (!stopped && ack?.ok === false) {
-        onSync?.({ ok: false, message: `Máy chủ từ chối theo dõi đơn: ${ack.error ?? "không rõ lý do"}` });
+      if (stopped || attempt !== joinAttempt || !socket.connected) return;
+      if (ack?.ok !== true) {
+        onConnectionChange?.(false);
+        onSync?.({ ok: false, message: `Máy chủ từ chối theo dõi đơn: ${ack?.error ?? "không nhận được xác nhận"}` });
+        return;
       }
+      onConnectionChange?.(true);
+      void resync();
     });
-    void resync();
   });
-  socket.on("disconnect", () => onConnectionChange?.(false));
-  socket.on("connect_error", () => onConnectionChange?.(false));
+  const markDisconnected = () => {
+    joinAttempt += 1;
+    onConnectionChange?.(false);
+  };
+  socket.on("disconnect", markDisconnected);
+  socket.on("connect_error", markDisconnected);
   socket.on("parcel.status.updated", handleStatus);
   socket.on("parcel.delivery.completed", handleStatus);
   socket.on("parcel.location.updated", handleLocation);

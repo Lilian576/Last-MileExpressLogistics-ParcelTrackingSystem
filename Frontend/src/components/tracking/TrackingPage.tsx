@@ -154,7 +154,7 @@ export function TrackingPage() {
               {lastSyncedAt && ` (đồng bộ lần cuối lúc ${fmtTime(lastSyncedAt)})`}.
             </div>
           )}
-          {syncError && !offline && (
+          {syncError && (
             <div className="notice notice-warn" role="alert">
               Chưa đồng bộ được dữ liệu mới nhất: {syncError}
             </div>
