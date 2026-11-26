@@ -296,6 +296,26 @@ describe('ParcelsService - Pricing Engine', () => {
       ]);
     });
 
+    it('trả GPS gần nhất đã lưu để khách đồng bộ lại sau reconnect', async () => {
+      const locationAt = new Date('2026-10-27T03:00:00.000Z');
+      mockPrisma.parcel.findUnique.mockResolvedValue({
+        ...base,
+        driverLatitude: 10.77,
+        driverLongitude: 106.7,
+        driverLocationAt: locationAt,
+        statusHistory: [],
+      });
+
+      const result = await service.findPublicTracking('PCL1');
+
+      expect(result.location).toEqual({
+        trackingCode: 'PCL1',
+        latitude: 10.77,
+        longitude: 106.7,
+        timestamp: locationAt.toISOString(),
+      });
+    });
+
     it('không tìm thấy mã -> NotFoundException', async () => {
       mockPrisma.parcel.findUnique.mockResolvedValue(null);
       await expect(service.findPublicTracking('NOPE')).rejects.toThrow(

@@ -103,12 +103,27 @@ Hành vi client (`subscribeToParcelRealtime` trong `src/api/parcelApi.ts`):
 
 - **Một socket duy nhất** cho mỗi trang tracking (trạng thái + vị trí); cleanup gỡ toàn bộ listener và đóng socket; cờ chống race xử lý
   StrictMode/đổi mã nên không rò rỉ socket.
-- Mỗi lần `connect` (kể cả reconnect, delay tăng dần tới 5s): `join:parcel` lại **và** tải lại snapshot REST để bù event bị rớt;
-  snapshot cũ hơn dữ liệu đang có bị bỏ qua (không lùi trạng thái).
+- Chỉ báo đang kết nối sau khi server xác nhận `join:parcel`; mỗi lần vào room (kể cả reconnect, delay tăng dần tới 5s)
+  tải lại snapshot REST để bù event trạng thái và vị trí GPS bị lỡ. Snapshot chứa GPS gần nhất đã lưu; dữ liệu cũ hơn
+  vị trí đang hiển thị bị bỏ qua.
 - Payload trạng thái sai dạng → không ghép bừa mà tải lại snapshot REST.
 - UI phân biệt rõ: *mã không tồn tại* (404), *lỗi API / không kết nối* (có nút Thử lại), *mất kết nối real-time*
   (cảnh báo + giờ đồng bộ cuối + giữ vị trí gần nhất đã nhận trong phiên).
 - Tài xế: tạm dừng gửi GPS khi socket mất kết nối và báo rõ; nhãn "GPS thiết bị" / "GPS giả lập" hiển thị ở màn hình tài xế.
+
+### Chạy thủ công Q03 reconnect (backend thật, không dùng mock)
+
+1. Khởi động PostgreSQL/backend và frontend theo mục 1; giữ `VITE_USE_MOCK=false`, và đặt `VITE_API_BASE_URL`/`VITE_SOCKET_URL`
+   cùng trỏ tới backend đang chạy. Khởi động lại frontend sau khi đổi cấu hình hoặc cập nhật mã.
+2. Mở `/driver` bằng tài khoản shipper đang được gán một đơn `OUT_FOR_DELIVERY`; mở `/tracking/<trackingCode>` trong tab khách riêng.
+   Xác nhận trang tài xế bật chia sẻ vị trí và ghi lại nhãn nguồn `GPS thiết bị` hoặc `GPS giả lập`.
+3. Chỉ trong tab khách, dùng DevTools → Network conditions → `Offline`. Để tab tài xế online; đợi nhãn `gửi lúc` trên tài xế tiến lên
+   và ghi lại thời điểm/nguồn GPS.
+4. Trên chính tab khách, chuyển Network conditions về `Disabled: No throttling`, không reload/F5. Chờ trang báo real-time và đối chiếu vị trí
+   cùng thời gian cập nhật với snapshot `GET /api/public/track/<trackingCode>`.
+5. Để tài xế gửi thêm một GPS tick; xác nhận cùng tab khách tự cập nhật tiếp mà không reload. Lưu SHA chạy, thời điểm, nguồn GPS và ảnh
+   của trạng thái offline, tài xế gửi vị trí, khách đồng bộ lại. Chỉ đánh dấu PASS nếu thấy cả vị trí bị lỡ sau reconnect và tick tiếp theo;
+   ghi rõ phần nào chưa xác minh được.
 
 ## 5. Kiểm tra
 

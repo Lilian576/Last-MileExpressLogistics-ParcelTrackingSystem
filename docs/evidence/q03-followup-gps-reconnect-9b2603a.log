@@ -1,0 +1,17 @@
+﻿Q03 follow-up verification 2026-11-26T16:20:24.0296280+07:00
+            tracking_code            |  current_status  |          driver_latitude          |          driver_longitude          |   driver_location_at    |   full_name    |         email         | assignment_type | assignment_status 
+-------------------------------------+------------------+-----------------------------------+------------------------------------+-------------------------+----------------+-----------------------+-----------------+-------------------
+ PCL19443f19944ab74cbac02dc02249d44f | OUT_FOR_DELIVERY | 10.783456000000000000000000000000 | 106.707890000000000000000000000000 | 2026-11-26 09:20:23.525 | Demo Shipper 2 | shipper2@example.test | pickup          | completed
+ PCL19443f19944ab74cbac02dc02249d44f | OUT_FOR_DELIVERY | 10.783456000000000000000000000000 | 106.707890000000000000000000000000 | 2026-11-26 09:20:23.525 | Demo Shipper 2 | shipper2@example.test | last_mile       | assigned
+(2 rows)
+
+      status      |       created_at        | location_id 
+------------------+-------------------------+-------------
+ CREATED          | 2026-11-26 09:13:19.684 | 
+ PENDING_PICKUP   | 2026-11-26 09:13:31.132 | 
+ PICKED_UP        | 2026-11-26 09:13:43.401 | 
+ IN_TRANSIT       | 2026-11-26 09:13:45.975 | 
+ AT_HUB           | 2026-11-26 09:13:59.711 | demo-hub-q1
+ OUT_FOR_DELIVERY | 2026-11-26 09:14:11.128 | demo-hub-q1
+(6 rows)
+
