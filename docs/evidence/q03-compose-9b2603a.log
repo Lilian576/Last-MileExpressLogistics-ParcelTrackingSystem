@@ -1,0 +1,138 @@
+﻿Q03 Compose verification 2026-11-26T15:45:11.6550406+07:00
+NAME                       IMAGE               COMMAND                  SERVICE    CREATED         STATUS                   PORTS
+q03sha9b2603a-api-1        q03sha9b2603a-api   "docker-entrypoint.s…"   api        4 minutes ago   Up 4 minutes             127.0.0.1:33001->3000/tcp
+q03sha9b2603a-postgres-1   postgres:16         "docker-entrypoint.s…"   postgres   4 minutes ago   Up 4 minutes (healthy)   127.0.0.1:55433->5432/tcp
+postgres-1  | The files belonging to this database system will be owned by user "postgres".
+api-1       | Prisma schema loaded from prisma/schema.prisma
+postgres-1  | This user must also own the server process.
+api-1       | Datasource "db": PostgreSQL database "lastmile_db", schema "public" at "postgres:5432"
+api-1       | 
+api-1       | 5 migrations found in prisma/migrations
+api-1       | 
+postgres-1  | 
+postgres-1  | The database cluster will be initialized with locale "en_US.utf8".
+postgres-1  | The default database encoding has accordingly been set to "UTF8".
+api-1       | Applying migration `20260822192227_init_auth_and_parcel_schema`
+postgres-1  | The default text search configuration will be set to "english".
+api-1       | Applying migration `20260909153939_add_shipper_location_to_user`
+postgres-1  | 
+postgres-1  | Data page checksums are disabled.
+api-1       | Applying migration `20261106000000_index_shipper_coordinates`
+api-1       | Applying migration `20261125000000_parcel_delivery_contract`
+api-1       | Applying migration `20261125090000_parcel_workflow_data`
+api-1       | 
+api-1       | The following migration(s) have been applied:
+api-1       | 
+api-1       | migrations/
+api-1       |   └─ 20260822192227_init_auth_and_parcel_schema/
+api-1       |     └─ migration.sql
+api-1       |   └─ 20260909153939_add_shipper_location_to_user/
+api-1       |     └─ migration.sql
+api-1       |   └─ 20261106000000_index_shipper_coordinates/
+api-1       |     └─ migration.sql
+api-1       |   └─ 20261125000000_parcel_delivery_contract/
+api-1       |     └─ migration.sql
+api-1       |   └─ 20261125090000_parcel_workflow_data/
+api-1       |     └─ migration.sql
+api-1       |       
+api-1       | All migrations have been successfully applied.
+postgres-1  | 
+postgres-1  | fixing permissions on existing directory /var/lib/postgresql/data ... ok
+api-1       | Running seed command `ts-node prisma/seed.ts` ...
+api-1       | 
+api-1       | 🌱  The seed command has been executed.
+postgres-1  | creating subdirectories ... ok
+api-1       | ┌─────────────────────────────────────────────────────────┐
+api-1       | │  Update available 5.22.0 -> 8.0.0-rc.35                 │
+api-1       | │                                                         │
+api-1       | │  This is a major update - please follow the guide at    │
+api-1       | │  https://pris.ly/d/major-version-upgrade                │
+api-1       | │                                                         │
+api-1       | │  Run the following to update                            │
+postgres-1  | selecting dynamic shared memory implementation ... posix
+postgres-1  | selecting default max_connections ... 100
+api-1       | │    npm i --save-dev prisma@latest                       │
+api-1       | │    npm i @prisma/client@latest                          │
+postgres-1  | selecting default shared_buffers ... 128MB
+api-1       | └─────────────────────────────────────────────────────────┘
+api-1       | 
+api-1       | > backend@0.0.1 start:prod
+postgres-1  | selecting default time zone ... Etc/UTC
+api-1       | > node dist/src/main.js
+postgres-1  | creating configuration files ... ok
+api-1       | 
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[NestFactory] [39m[32mStarting Nest application...[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mStateMachineModule dependencies initialized[39m[38;5;3m +19ms[39m
+postgres-1  | running bootstrap script ... ok
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mPassportModule dependencies initialized[39m[38;5;3m +0ms[39m
+postgres-1  | performing post-bootstrap initialization ... ok
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mConfigHostModule dependencies initialized[39m[38;5;3m +0ms[39m
+postgres-1  | syncing data to disk ... ok
+postgres-1  | 
+postgres-1  | 
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAppModule dependencies initialized[39m[38;5;3m +1ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mConfigModule dependencies initialized[39m[38;5;3m +0ms[39m
+postgres-1  | Success. You can now start the database server using:
+postgres-1  | 
+postgres-1  |     pg_ctl -D /var/lib/postgresql/data -l logfile start
+postgres-1  | 
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mConfigModule dependencies initialized[39m[38;5;3m +0ms[39m
+postgres-1  | initdb: warning: enabling "trust" authentication for local connections
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mJwtModule dependencies initialized[39m[38;5;3m +0ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mTrackingModule dependencies initialized[39m[38;5;3m +1ms[39m
+postgres-1  | initdb: hint: You can change this by editing pg_hba.conf or using the option -A, or --auth-local and --auth-host, the next time you run initdb.
+postgres-1  | waiting for server to start....2026-11-26 08:40:31.209 UTC [48] LOG:  starting PostgreSQL 16.16 (Debian 16.16-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mAuthModule dependencies initialized[39m[38;5;3m +0ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[InstanceLoader] [39m[32mParcelsModule dependencies initialized[39m[38;5;3m +1ms[39m
+postgres-1  | 2026-11-26 08:40:31.212 UTC [48] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[WebSocketsController] [39m[32mTrackingGateway subscribed to the "ping" message[39m[38;5;3m +14ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[WebSocketsController] [39m[32mTrackingGateway subscribed to the "join:parcel" message[39m[38;5;3m +0ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[WebSocketsController] [39m[32mTrackingGateway subscribed to the "leave:parcel" message[39m[38;5;3m +0ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[WebSocketsController] [39m[32mTrackingGateway subscribed to the "driver:location" message[39m[38;5;3m +0ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAppController {/}:[39m[38;5;3m +4ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/, GET} route[39m[38;5;3m +1ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mParcelsController {/api/parcels}:[39m[38;5;3m +0ms[39m
+postgres-1  | 2026-11-26 08:40:31.217 UTC [51] LOG:  database system was shut down at 2026-11-26 08:40:31 UTC
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/parcels/calculate-fee, POST} route[39m[38;5;3m +1ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/parcels, POST} route[39m[38;5;3m +1ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/parcels/assigned/mine, GET} route[39m[38;5;3m +1ms[39m
+postgres-1  | 2026-11-26 08:40:31.222 UTC [48] LOG:  database system is ready to accept connections
+postgres-1  |  done
+postgres-1  | server started
+postgres-1  | CREATE DATABASE
+postgres-1  | 
+postgres-1  | 
+postgres-1  | /usr/local/bin/docker-entrypoint.sh: ignoring /docker-entrypoint-initdb.d/*
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/parcels/mine, GET} route[39m[38;5;3m +2ms[39m
+postgres-1  | 
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/parcels/hubs, GET} route[39m[38;5;3m +1ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/parcels, GET} route[39m[38;5;3m +0ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/parcels/:id, GET} route[39m[38;5;3m +1ms[39m
+postgres-1  | waiting for server to shut down....2026-11-26 08:40:31.402 UTC [48] LOG:  received fast shutdown request
+postgres-1  | 2026-11-26 08:40:31.405 UTC [48] LOG:  aborting any active transactions
+postgres-1  | 2026-11-26 08:40:31.406 UTC [48] LOG:  background worker "logical replication launcher" (PID 54) exited with exit code 1
+postgres-1  | 2026-11-26 08:40:31.406 UTC [49] LOG:  shutting down
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/parcels/:id/status, PATCH} route[39m[38;5;3m +0ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/parcels/:id/assign-courier, PATCH} route[39m[38;5;3m +1ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mPublicTrackingController {/api/public}:[39m[38;5;3m +0ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/api/public/track/:code, GET} route[39m[38;5;3m +1ms[39m
+postgres-1  | 2026-11-26 08:40:31.408 UTC [49] LOG:  checkpoint starting: shutdown immediate
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RoutesResolver] [39m[32mAuthController {/auth}:[39m[38;5;3m +0ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/auth/register, POST} route[39m[38;5;3m +0ms[39m
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[RouterExplorer] [39m[32mMapped {/auth/login, POST} route[39m[38;5;3m +1ms[39m
+postgres-1  | 2026-11-26 08:40:31.484 UTC [49] LOG:  checkpoint complete: wrote 935 buffers (5.7%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.016 s, sync=0.052 s, total=0.078 s; sync files=301, longest=0.003 s, average=0.001 s; distance=4346 kB, estimate=4346 kB; lsn=0/1943060, redo lsn=0/1943060
+postgres-1  | 2026-11-26 08:40:31.490 UTC [48] LOG:  database system is shut down
+postgres-1  |  done
+api-1       | [32m[Nest] 194  - [39m11/26/2026, 8:40:40 AM [32m    LOG[39m [38;5;3m[NestApplication] [39m[32mNest application successfully started[39m[38;5;3m +117ms[39m
+postgres-1  | server stopped
+postgres-1  | 
+postgres-1  | PostgreSQL init process complete; ready for start up.
+postgres-1  | 
+postgres-1  | 2026-11-26 08:40:31.533 UTC [1] LOG:  starting PostgreSQL 16.16 (Debian 16.16-1.pgdg13+1) on x86_64-pc-linux-gnu, compiled by gcc (Debian 14.2.0-19) 14.2.0, 64-bit
+postgres-1  | 2026-11-26 08:40:31.534 UTC [1] LOG:  listening on IPv4 address "0.0.0.0", port 5432
+postgres-1  | 2026-11-26 08:40:31.534 UTC [1] LOG:  listening on IPv6 address "::", port 5432
+postgres-1  | 2026-11-26 08:40:31.539 UTC [1] LOG:  listening on Unix socket "/var/run/postgresql/.s.PGSQL.5432"
+postgres-1  | 2026-11-26 08:40:31.545 UTC [64] LOG:  database system was shut down at 2026-11-26 08:40:31 UTC
+postgres-1  | 2026-11-26 08:40:31.550 UTC [1] LOG:  database system is ready to accept connections
+postgres-1  | 2026-11-26 08:42:25.991 UTC [88] ERROR:  could not serialize access due to concurrent update
+postgres-1  | 2026-11-26 08:42:25.991 UTC [88] STATEMENT:  UPDATE "public"."parcels" SET "driver_latitude" = $1, "driver_longitude" = $2, "driver_location_at" = $3, "updated_at" = $4 WHERE ("public"."parcels"."id" = $5 AND 1=1) RETURNING "public"."parcels"."id", "public"."parcels"."tracking_code", "public"."parcels"."sender_id", "public"."parcels"."receiver_name", "public"."parcels"."receiver_phone", "public"."parcels"."receiver_address", "public"."parcels"."weight_kg", "public"."parcels"."driver_latitude", "public"."parcels"."driver_longitude", "public"."parcels"."driver_location_at", "public"."parcels"."dimensions", "public"."parcels"."cod_amount", "public"."parcels"."fee_vnd", "public"."parcels"."sender_lat", "public"."parcels"."sender_lng", "public"."parcels"."receiver_lat", "public"."parcels"."receiver_lng", "public"."parcels"."delivery_proof", "public"."parcels"."delivered_at", "public"."parcels"."current_status"::text, "public"."parcels"."failed_attempt_count", "public"."parcels"."origin_location_id", "public"."parcels"."destination_location_id", "public"."parcels"."current_location_id", "public"."parcels"."created_at", "public"."parcels"."updated_at"

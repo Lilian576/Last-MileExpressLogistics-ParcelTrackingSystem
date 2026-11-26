@@ -88,4 +88,21 @@ describe("TrackingPage", () => {
     expect(screen.getByText(/Vị trí gần nhất đã nhận/)).toBeInTheDocument();
     expect(screen.getByTestId("map")).toBeInTheDocument();
   });
+
+  it("hiển thị vị trí đã lưu trong snapshot REST ban đầu", async () => {
+    trackParcel.mockResolvedValue({
+      ...PARCEL,
+      location: {
+        trackingCode: "PCL1",
+        latitude: 10.77,
+        longitude: 106.7,
+        timestamp: "2026-01-01T02:00:00.000Z",
+      },
+    });
+    renderPage();
+
+    expect(await screen.findByTestId("map")).toBeInTheDocument();
+    expect(screen.getByText(/10\.77000/)).toBeInTheDocument();
+    expect(screen.getByText(/106\.70000/)).toBeInTheDocument();
+  });
 });

@@ -50,6 +50,7 @@ export function TrackingPage() {
           return;
         }
         setParcel(p);
+        setLocation(p.location ?? null);
         setLoadState("ready");
         setLastSyncedAt(new Date());
         // 2. Đơn chưa kết thúc -> mở ĐÚNG MỘT socket cho cả trạng thái lẫn vị trí tài xế
@@ -153,7 +154,7 @@ export function TrackingPage() {
               {lastSyncedAt && ` (đồng bộ lần cuối lúc ${fmtTime(lastSyncedAt)})`}.
             </div>
           )}
-          {syncError && !offline && (
+          {syncError && (
             <div className="notice notice-warn" role="alert">
               Chưa đồng bộ được dữ liệu mới nhất: {syncError}
             </div>
